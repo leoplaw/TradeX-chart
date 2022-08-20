@@ -12,6 +12,7 @@ export default defineConfig(({ command, mode }) => {
     return {
       // build specific config
       build: {
+        base: "/TradeX-chart/",
         lib: {
           entry: path.resolve(__dirname, 'src/index.js'),
           name: name,
