@@ -5,6 +5,25 @@ const { defineConfig } = require('vite')
 const name = "TradeX-chart"
 const id = "tradex-chart"
 
+export default defineConfig({
+
+  base: "/TradeX-chart/",
+  rollupOptions: {
+    // make sure to externalize deps that shouldn't be bundled into your library
+    external: [
+      'talib-web',
+    ],
+    output: {
+      // Provide global variables to use in the UMD build for externalized deps
+      globals: {
+        // vue: 'Vue'
+      }
+    }
+  }
+  
+})
+
+/**
 export default defineConfig(({ command, mode }) => {
 
   if (command === 'build') {
@@ -49,7 +68,7 @@ export default defineConfig(({ command, mode }) => {
     }
   } 
 })
-
+*/
 
 // module.exports = defineConfig({
 //   build: {
