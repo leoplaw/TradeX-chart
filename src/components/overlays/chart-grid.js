@@ -1,6 +1,9 @@
 // chart-grid.js
 
 import { GridStyle } from "../../definitions/style"
+import { BUFFERSIZE } from "../../definitions/chart"
+
+
 export default class chartGrid {
 
   #target
@@ -8,6 +11,7 @@ export default class chartGrid {
   #config
   #xAxis
   #yAxis
+  #core
 
   constructor(target, xAxis, yAxis, config) {
 
@@ -16,7 +20,7 @@ export default class chartGrid {
     this.#config = config
     this.#xAxis = xAxis
     this.#yAxis = yAxis
-
+    this.#core = xAxis.mediator.api.core
     this.#config.axes = config.axes || "both"
   }
 
@@ -54,5 +58,6 @@ export default class chartGrid {
 
     ctx.restore();
   }
+
 }
 

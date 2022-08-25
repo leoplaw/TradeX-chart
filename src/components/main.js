@@ -25,7 +25,10 @@ import {
   PRICEDIGITS,
   XAXIS_ZOOM,
   BUFFERSIZE,
+  ROWMINHEIGHT,
+  OFFCHARTDEFAULTHEIGHT,
 } from "../definitions/chart"
+import { isNumber } from "../utils/typeChecks"
 
 const STYLE_ROWS = "width:100%; min-width:100%;"
 const STYLE_ROW = "position: relative; overflow: hidden;"
@@ -46,19 +49,21 @@ export default class MainPane {
   #elTime
   #elChart
   #elOffCharts = []
+  #elGrid
   #elCanvas
   #elViewport
 
   #viewport
   #layerGrid
   #layerLabels
-  #OffCharts = []
+  #OffCharts = new Map()
   #Chart
   #Time
   #chartGrid
 
-  #offChartDefaultH = 30 // %
+  #offChartDefaultH = OFFCHARTDEFAULTHEIGHT // %
   #offChartDefaultWpx = 120
+  #rowMinH = ROWMINHEIGHT // px
 
   #cursorPos = [0, 0]
   #buffer
@@ -93,6 +98,8 @@ export default class MainPane {
   get chartH() { return this.#elChart.clientHeight }
   get rowsW() { return this.#elRows.clientWidth }
   get rowsH() { return this.#elRows.clientHeight }
+  get rowMinH() { return this.#rowMinH }
+  set rowMinH(h) { if (isNumber(h)) this.#rowMinH = Math.abs(h) }
   get pos() { return this.dimensions }
   get dimensions() { return DOM.elementDimPos(this.#elMain) }
   get range() { return this.#core.range }
@@ -115,6 +122,7 @@ export default class MainPane {
     this.#elRows = DOM.findBySelector(`#${api.id} .${CLASS_ROWS}`)
     this.#elTime = DOM.findBySelector(`#${api.id} .${CLASS_TIME}`)
     this.#elChart = DOM.findBySelector(`#${api.id} .${CLASS_CHART}`)
+    this.#elGrid = DOM.findBySelector(`#${api.id} .${CLASS_GRID}`)
     this.#elViewport = DOM.findBySelector(`#${api.id} .${CLASS_GRID} .viewport`)
 
     api.parent = this
@@ -142,7 +150,9 @@ export default class MainPane {
     // register chart
     this.#Chart = this.#mediator.register("Chart", Chart, options, api)
 
-    this.#buffer = this.config.buffer || BUFFERSIZE
+    this.#buffer = isNumber(this.config.buffer)? this.config.buffer : BUFFERSIZE
+    this.#rowMinH = isNumber(this.config.rowMinH)? this.config.rowMinH : ROWMINHEIGHT
+    this.#offChartDefaultH = isNumber(this.config.offChartDefaultH)? this.config.offChartDefaultH : OFFCHARTDEFAULTHEIGHT
 
     this.log(`${this.#name} instantiated`)
   }
@@ -151,9 +161,10 @@ export default class MainPane {
     this.#Time.start()
     this.#Chart.start()
 
-    for (let i = 0; i < this.#OffCharts.length; i++) {
-      this.#OffCharts[i].start(i)
-    }
+    let i = 0
+    this.#OffCharts.forEach((offChart, key) => {
+      offChart.start(i++)
+    })
 
     // prepare layered canvas
     this.createViewport()
@@ -176,8 +187,6 @@ export default class MainPane {
     this.#controller.removeEventListener("enddrag", this.onChartDragDone);
     this.#controller.removeEventListener("keydown", this.onChartKeyDown)
     this.#controller.removeEventListener("keyup", this.onChartKeyDown)
-
-    this.off("resizeChart", this.onResize)
   }
 
 
@@ -198,9 +207,6 @@ export default class MainPane {
     this.#controller.on("mouseup", this.onMouseUp.bind(this))
 
     // listen/subscribe/watch for parent notifications
-    this.on("resize", (dimensions) => this.onResize.bind(this))
-    this.on("divider_mousedown", this.onDividerMouseDown.bind(this))
-    this.on("divider_mouseup", this.onDividerMouseUp.bind(this))
   }
 
   on(topic, handler, context) {
@@ -213,10 +219,6 @@ export default class MainPane {
 
   emit(topic, data) {
     this.#mediator.emit(topic, data)
-  }
-
-  onResize(dimensions) {
-    this.setDimensions(dimensions)
   }
 
   onMouseWheel(e) {
@@ -238,32 +240,40 @@ export default class MainPane {
   }
   
   onMouseMove(e) {
-    // this.#cursorPos = [e.layerX, e.layerY]
-    this.#cursorPos = [Math.floor(e.position.x), Math.floor(e.position.y)]
+    this.#cursorPos = [
+      e.position.x, e.position.y, 
+      e.dragstart.x, e.dragstart.y,
+      e.movement.x, e.movement.y
+    ]
 
     this.emit("main_mousemove", this.#cursorPos)
   }
 
+  onMouseUp(e) {
+    this.emit("main_mouseup", e)
+    // console.log("Main Pane: mouse up")
+  }
+
   onChartDrag(e) {
     this.#cursorPos = [
-      Math.floor(e.position.x), Math.floor(e.position.y), 
+      e.position.x, e.position.y, 
       e.dragstart.x, e.dragstart.y,
       e.movement.x, e.movement.y
     ]
     this.emit("chart_pan", this.#cursorPos)
     this.draw()
-    console.log("what a drag!")
+    // console.log("what a drag!")
   }
 
   onChartDragDone(e) {
     this.#cursorPos = [
-      Math.floor(e.position.x), Math.floor(e.position.y), 
+      e.position.x, e.position.y, 
       e.dragstart.x, e.dragstart.y,
       e.movement.x, e.movement.y
     ]
     this.emit("chart_panDone", this.#cursorPos)
     this.draw()
-    console.log("drag done")
+    // console.log("drag done")
   }
 
   onChartKeyDown(e) {
@@ -271,12 +281,12 @@ export default class MainPane {
 
     switch (e.keyCode) {
       case Keys.Left:
-        console.log("keydown: cursor Left")
+        // console.log("keydown: cursor Left")
 
         this.emit("chart_pan", [0,null,step,null,step * -1])
         break;
       case Keys.Right:
-        console.log("keydown: cursor Right")
+        // console.log("keydown: cursor Right")
 
         this.emit("chart_pan", [step,null,0,null,step])
         break;
@@ -289,29 +299,17 @@ export default class MainPane {
 
     switch (e.keyCode) {
       case Keys.Left:
-        console.log("keyup: cursor Left")
+        // console.log("keyup: cursor Left")
         
         this.emit("chart_panDone", [0,null,step,null,step * -1])
         break;
       case Keys.Right:
-        console.log("keyup: cursor Right")
+        // console.log("keyup: cursor Right")
 
         this.emit("chart_panDone", [step,null,0,null,step])
         break;
     }
     this.draw()
-  }
-
-  onMouseUp(e) {
-    console.log("Main Pane: mouse up")
-  }
-
-  onDividerMouseDown(e) {
-    console.log(e)
-  }
-
-  onDividerMouseUp(e) {
-    console.log(e)
   }
 
   mount(el) {
@@ -321,24 +319,63 @@ export default class MainPane {
   setWidth(w) {
     const resize = this.rowsW / w
     const rows = this.#elRows.children
+    /*
     for (let row of rows) {
-      row.style.width = row.style.width * resize
+      row.style.width = `${Math.round(row.clientWidth * resize)}px`
     }
-    this.#elRows.style.width = w
+    */
+    this.#elRows.style.width = `${Math.round(w * resize)}px`
   }
 
   setHeight(h) {
+    const api = this.#mediator.api
     const resize = this.rowsH / (h - api.timeH)
     const rows = this.#elRows.children
+    /*
     for (let row of rows) {
-      row.style.height = row.style.height * resize
+      row.style.height = `${Math.round(row.style.height * resize)}px`
     }
-    this.#elRows.style.height = this.#elRows.style.height * resize
+    */
+    this.#elRows.style.height = `${Math.round(this.#elRows.style.height * resize)}px`
   }
 
   setDimensions(dimensions) {
+
+    let height = dimensions.mainH - this.#Time.height
+    let oldHeight = this.height
+    let chartW = dimensions.mainW // this.#Chart.width
+    let chartH = Math.round(this.#Chart.height * dimensions.resizeH) - this.time.height
+    let width = chartW - this.#Chart.scale.width
+
     this.setWidth(dimensions.mainW)
     this.setHeight(dimensions.mainH)
+
+    this.#core.scrollPos = -1
+
+    this.#Time.setDimensions({w: dimensions.mainW})
+    this.#Time.draw()
+
+    this.#elGrid.style.height = `${height}px`
+    this.#elGrid.style.width = `${width}px`
+    this.#elViewport.style.height = `${height}px`
+    this.#elViewport.style.width = `${width}px`
+    this.#viewport.setSize(width, height)
+
+    const buffer = this.buffer
+    width = Math.round(width * ((100 + buffer) * 0.01))
+    this.#layerGrid.setSize(width, height)
+    this.#chartGrid.draw("x")
+    this.#viewport.render();
+
+    this.#Chart.resize(chartW, chartH)
+
+    this.#OffCharts.forEach((offChart, key) => {
+      chartH = Math.round(offChart.height * dimensions.resizeH) //- this.time.height
+      offChart.resize(chartW, chartH)
+      offChart.Divider.setDividerPos()
+    })
+
+    this.#core.range
 
     dimensions.rowsW = this.rowsW
     dimensions.rowsH = this.rowsH
@@ -366,7 +403,7 @@ export default class MainPane {
     }
     else {
       // adjust chart size for subsequent offCharts
-      options.rowH = rowsH / this.#OffCharts.length
+      options.rowH = rowsH / this.#OffCharts.size
       options.chartH = this.rowsH - rowsH
     }
 
@@ -393,7 +430,7 @@ export default class MainPane {
 
     let o = this.#mediator.register("OffChart", OffChart, options, api)
     
-    this.#OffCharts.push(o)
+    this.#OffCharts.set(o.ID, o)
 
     this.emit("addOffChart", o)
   }
@@ -515,4 +552,30 @@ export default class MainPane {
     // draw the gird
     this.draw()
   }
+
+  resizeRowPair(divider, pos) {
+    let active = divider.offChart
+    let ID = active.ID
+    let offCharts = Object.keys(this.#OffCharts)
+    let i = offCharts.indexOf(ID) - 1
+    let prev = (i > 0) ? 
+      this.#OffCharts.get(offCharts[i]) :
+      this.#Chart;
+    let activeH = active.height - pos[5]
+    let prevH  = prev.height + pos[5]
+    
+    if ( activeH >= this.#rowMinH
+        && prevH >= this.#rowMinH) {
+          divider.offChart.Divider.updateDividerPos(pos)
+          active.resize(undefined, activeH)
+          prev.resize(undefined, prevH)
+    }
+    active.element.style.userSelect = 'none';
+    // active.element.style.pointerEvents = 'none';
+    prev.element.style.userSelect = 'none';
+    // prev.element.style.pointerEvents = 'none';
+
+    return {active, prev}
+  }
+
 }

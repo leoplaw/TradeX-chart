@@ -2,6 +2,7 @@
 
 import VolumeBar from "../primitives/volume";
 import { round } from "../../utils/number";
+import { BUFFERSIZE } from "../../definitions/chart"
 
 export default class chartVolume extends VolumeBar {
 
@@ -10,6 +11,7 @@ export default class chartVolume extends VolumeBar {
   #config
   #xAxis
   #yAxis
+  #core
 
   constructor(target, xAxis, yAxis, config) {
 
@@ -19,10 +21,11 @@ export default class chartVolume extends VolumeBar {
     this.#scene = target.scene
     this.#config = config
     this.#xAxis = xAxis
+    this.#core = xAxis.mediator.api.core
     this.#config.maxVolumeH = config?.maxVolumeH || 100
   }
 
-  draw(range) {
+  draw(range=this.#core.range) {
     this.#scene.clear()
 
     const data = range.data

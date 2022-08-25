@@ -116,6 +116,7 @@ export default class Chart {
   get shortName() { return this.#shortName }
   get mediator() { return this.#mediator }
   get options() { return this.#options }
+  get element() { return this.#elChart }
   get scale() { return this.#Scale }
   get elScale() { return this.#elScale }
   set width(w) { this.setWidth(w) }
@@ -227,8 +228,7 @@ export default class Chart {
     this.#controller.removeEventListener("mouseenter", this.onMouseEnter);
     this.#controller.removeEventListener("mouseout", this.onMouseOut);
 
-    this.off("resizeChart", this.onResize)
-    this.off("main_mousemove", this.onResize)
+    this.off("main_mousemove", this.onMouseMove)
   }
 
 
@@ -243,7 +243,6 @@ export default class Chart {
     this.#controller.on("mouseout", this.onMouseOut.bind(this));
 
     // listen/subscribe/watch for parent notifications
-    this.on("resize", (dimensions) => this.onResize.bind(this))
     this.on("main_mousemove", (pos) => this.updateLegends(pos))
   }
 
@@ -257,10 +256,6 @@ export default class Chart {
 
   emit(topic, data) {
     this.#mediator.emit(topic, data)
-  }
-
-  onResize(dimensions) {
-    this.setDimensions(dimensions)
   }
 
   onMouseWheel(e) {
@@ -318,20 +313,40 @@ export default class Chart {
   }
 
   setWidth(w) {
-    this.#elChart.style.width = w
-    this.#elViewport.style.width = w - this.#elScale.clientWidth
+    if (!isNumber(w)) w = this.width || this.#parent.width
+
+    this.#elChart.style.width = `${w}px`
+    this.#elViewport.style.width = `${w - this.#elScale.clientWidth}px`
   }
 
   setHeight(h) {
-    this.#elChart.style.height = h
-    this.#elScale.style.height = h
+    if (!isNumber(h)) h = this.height || this.#parent.height
+
+    this.#elChart.style.height = `${h}px`
+    this.#elScale.style.height = `${h}px`
+    this.#elViewport.style.height = `${h}px`
     this.#Scale.setDimensions({w: null, h: h})
   }
 
   setDimensions(dim) {
-    this.#viewport.setSize(dim.w - this.#elScale.clientWidth, dim.h)
+    const buffer = this.config.buffer || BUFFERSIZE
+    const width = dim.w - this.#elScale.clientWidth
+    const height = dim.h
+    const layerWidth = Math.round(width * ((100 + buffer) * 0.01))
+
+    this.#viewport.setSize(width, height)
+    this.#layerGrid.setSize(layerWidth, height)
+    this.#layerVolume.setSize(layerWidth, height)
+    // TODO: iterate layersOnChart and setSize()
+    // this.#layersOnChart.setSize(layerWidth, height)
+    this.#layerCandles.setSize(layerWidth, height)
+    this.#layerCursor.setSize(width, height)
+
     this.setWidth(dim.w)
     this.setHeight(dim.h)
+    this.#Scale.resize(dim.w, dim.h)
+
+    this.draw(undefined, true)
   }
 
   setTheme(theme) {
@@ -478,7 +493,7 @@ export default class Chart {
     return indicators
   }
 
-  draw(range, update=false) {
+  draw(range=this.range, update=false) {
     this.#layerGrid.setPosition(this.#core.scrollPos, 0)
     this.#layerVolume.setPosition(this.#core.scrollPos, 0)
     this.#layerCandles.setPosition(this.#core.scrollPos, 0)
@@ -567,5 +582,10 @@ export default class Chart {
     this.draw(this.range, true)
 
     this.emit("chart_zoomDone")
+  }
+
+  resize(width=this.width, height=this.height) {
+    // adjust element, viewport and layers
+    this.setDimensions({w: width, h: height})
   }
 }

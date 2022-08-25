@@ -107,12 +107,23 @@ export default class Timeline {
   }
 
   setWidth(w) {
-    this.#elTime.style.width = w
+    this.#elTime.style.width = `${w}px`
+    this.#elViewport.style.width = w
   }
 
   setDimensions(dim) {
-    this.#viewport.setSize(dim.w, this.height)
+    const buffer = this.config.buffer || BUFFERSIZE
+    const width = dim.w - this.#core.Chart.scale.width
+    const height = this.height
+    const layerWidth = Math.round(width * ((100 + buffer) * 0.01))
+
+    this.#viewport.setSize(width, this.height)
+    this.#layerLabels.setSize(layerWidth, height)
+    this.#layerOverlays.setSize(layerWidth, height)
+    this.#layerCursor.setSize(layerWidth, height)
+
     this.setWidth(dim.w)
+    this.draw()
   }
 
   start() {
@@ -240,6 +251,11 @@ export default class Timeline {
 
     ctx.restore()
     this.#viewport.render()
+  }
+
+  resize(width=this.width, height=this.height) {
+    // adjust element, viewport and layers
+    this.setDimensions({w: width, h: height})
   }
 
 }

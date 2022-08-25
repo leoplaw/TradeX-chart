@@ -109,6 +109,7 @@ export default class OffChart {
   get pos() { return this.dimensions }
   get dimensions() { return DOM.elementDimPos(this.#elOffChart) }
   get elOffChart() { return this.#elOffChart }
+  get element() { return this.#elOffChart }
   get widgets() { return this.#core.WidgetsG }
   get offChartID() { return this.#offChartID }
   get cursorPos() { return this.#cursorPos }
@@ -119,6 +120,10 @@ export default class OffChart {
   get scrollPos() { return this.#core.scrollPos }
   get bufferPx() { return this.#core.bufferPx }
   get Divider() { return this.#Divider }
+  get width() { return this.#elOffChart.clientWidth }
+  set width(w) { this.setWidth(w) } 
+  get height() { return this.#elOffChart.clientHeight }
+  set height(h) { this.setHeight(h) }
 
   init(options) {
 
@@ -193,8 +198,7 @@ export default class OffChart {
     this.#controller.removeEventListener("mouseenter", this.onMouseEnter);
     this.#controller.removeEventListener("mouseout", this.onMouseOut);
 
-    this.off("resizeChart", this.onResize)
-    this.off("main_mousemove", this.onResize)
+    this.off("main_mousemove", this.onMouseMove)
   }
 
 
@@ -206,7 +210,6 @@ export default class OffChart {
     this.#controller.on("mouseout", this.onMouseOut.bind(this));
 
     // listen/subscribe/watch for parent notifications
-    this.on("resize", this.onResize.bind(this))
     this.on("main_mousemove", this.updateLegends.bind(this))
   }
 
@@ -220,10 +223,6 @@ export default class OffChart {
 
   emit(topic, data) {
     this.mediator.emit(topic, data)
-  }
-
-  onResize(dimensions) {
-    this.setDimensions(dimensions)
   }
 
   onMouseMove(e) {
@@ -278,20 +277,37 @@ export default class OffChart {
   }
 
   setWidth(w) {
-    this.#elOffChart.style.width = w
-    this.#elViewport.style.width = w - this.#elScale.clientWidth
+    if (!isNumber(w)) w = this.width || this.#parent.width
+
+    this.#elOffChart.style.width = `${w}px`
+    this.#elViewport.style.width = `${w - this.#elScale.clientWidth}px`
   }
 
   setHeight(h) {
-    this.#elOffChart.style.height = h
-    this.#elScale.style.height = h
+    if (!isNumber(h)) h = this.height || this.#parent.height
+
+    this.#elOffChart.style.height = `${h}px`
+    this.#elScale.style.height = `${h}px`
+    this.#elViewport.style.height = `${h}px`
     this.#Scale.setDimensions({w: null, h: h})
   }
 
   setDimensions(dim) {
-    // this.#viewport.setSize(dim.w - this.#elScale.clientWidth, dim.h)
+    const buffer = this.config.buffer || BUFFERSIZE
+    const width = dim.w - this.#elScale.clientWidth
+    const height = dim.h
+    const layerWidth = Math.round(width * ((100 + buffer) * 0.01))
+
+    this.#viewport.setSize(width, dim.h)
+    this.#layerGrid.setSize(layerWidth, height)
+    this.#layersIndicator.setSize(layerWidth, height)
+    this.#layerCursor.setSize(width, height)
+
     this.setWidth(dim.w)
     this.setHeight(dim.h)
+    this.#Scale.resize(dim.w, dim.h)
+
+    this.draw(undefined, true)
   }
 
   setTheme(theme) {
@@ -393,7 +409,7 @@ export default class OffChart {
     this.#viewport.addLayer(this.#layersIndicator)
   }
 
-  draw(range, update=false) {
+  draw(range=this.range, update=false) {
     this.#layerGrid.setPosition(this.#core.scrollPos, 0)
     this.#layersIndicator.setPosition(this.#core.scrollPos, 0)
 
@@ -437,6 +453,11 @@ export default class OffChart {
   zoomRange(pos) {
     // draw the chart - grid, candles, volume
     this.draw(this.range, true)
+  }
+
+  resize(width=this.width, height=this.height) {
+    // adjust partent element
+    this.setDimensions({w: width, h: height})
   }
 
 }

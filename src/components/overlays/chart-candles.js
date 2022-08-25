@@ -4,6 +4,8 @@ import Candle from "../primitives/candle";
 import { CandleStyle } from "../../definitions/style"
 import { round } from "../../utils/number";
 import { getTextRectWidth } from "../../utils/canvas";
+import { BUFFERSIZE } from "../../definitions/chart"
+
 
 export default class chartCandles extends Candle {
 
@@ -12,6 +14,7 @@ export default class chartCandles extends Candle {
   #config
   #xAxis
   #yAxis
+  #core
 
   constructor(target, xAxis, yAxis, config) {
 
@@ -22,11 +25,12 @@ export default class chartCandles extends Candle {
     this.#config = config
     this.#xAxis = xAxis
     this.#yAxis = yAxis
+    this.#core = xAxis.mediator.api.core
   }
 
   get target() { return this.#target }
 
-  draw(range) {
+  draw(range=this.#core.range) {
     this.#scene.clear()
 
     const render = (this.#config.CandleType === "AREA") ?

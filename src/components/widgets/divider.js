@@ -6,9 +6,13 @@ import {
   CLASS_DIVIDERS
 } from "../../definitions/core"
 import {
+  DIVIDERHEIGHT
+} from "../../definitions/chart"
+import {
   InputController,
   Keys
 } from "../../input/controller"
+import { isNumber } from "../../utils/typeChecks"
 
 
 export default class Divider {
@@ -65,8 +69,10 @@ export default class Divider {
   get el() { return this.#elDivider }
   get ID() { return this.#id }
   get offChart() { return this.#offChart }
+  get config() { return this.#core.config }
   get pos() { return this.dimensions }
   get dimensions() { return DOM.elementDimPos(this.#elDivider) }
+  get height() { return this.#elDivider.clientHeight }
 
   init() {
     // insert element
@@ -117,7 +123,6 @@ export default class Divider {
 
   onMouseEnter() {
     this.#elDivider.style.background = "#888888C0"
-    console.log("Divider mouse enter")
   }
 
   onMouseOut() {
@@ -135,9 +140,6 @@ export default class Divider {
       cursorPos: this.#cursorPos
     }
     this.emit("divider_drag", dragEvent)
-    this.updateDividerPos(this.#cursorPos)
-
-    console.log("Divider drag")
   }
 
   onDividerDragDone(e) {
@@ -151,8 +153,6 @@ export default class Divider {
       cursorPos: this.#cursorPos
     }
     this.emit("divider_dragDone", dragEvent)
-
-    console.log("Divider drag done")
   }
 
   onMouseDown(e) {
@@ -162,7 +162,7 @@ export default class Divider {
       id: this.ID,
       e: e,
       pos: this.#cursorPos,
-      ofChart: this.offChart
+      offChart: this.offChart
     })
   }
 
@@ -173,7 +173,7 @@ export default class Divider {
       id: this.ID,
       e: e,
       pos: this.#cursorPos,
-      ofChart: this.offChart
+      offChart: this.offChart
     })
   }
 
@@ -194,26 +194,36 @@ export default class Divider {
     const dividersStyle = `position: absolute;`
 
     const node = `
-        <div class="${CLASS_DIVIDERS}" style="${dividersStyle}"></div>
-        `
+  <div class="${CLASS_DIVIDERS}" style="${dividersStyle}"></div>
+  `
     return node
   }
 
   dividerNode() {
     let top = this.#offChart.pos.top - DOM.elementDimPos(this.#elDividers).top,
       width = this.#core.MainPane.rowsW,
+      height = (isNumber(this.config.dividerHeight)) ? 
+        this.config.dividerHeight : DIVIDERHEIGHT,
       left = this.#core.toolsW;
-    const styleDivider = `position: absolute; top: ${top}px; left: ${left}px; z-index:100; width: ${width}px; height: 10px; background: #FFFFFF00;`
+      top -= height / 2
+
+    const styleDivider = `position: absolute; top: ${top}px; left: ${left}px; z-index:100; width: ${width}px; height: ${height}px; background: #FFFFFF00;`
 
     const node = `
-        <div id="${this.#id}" class="divider" style="${styleDivider}"></div>
-        `
+  <div id="${this.#id}" class="divider" style="${styleDivider}"></div>
+  `
     return node
   }
 
   updateDividerPos(pos) {
-    // let dividerY = this.#elDivider.getBoundingClientRect().top,
+    let dividerY = this.#elDivider.offsetTop;
+        dividerY += pos[5]
+    this.#elDivider.style.top = `${dividerY}px`
+  }
 
-    // this.#elDivider.style.top += Math.sign(pos[5])
+  setDividerPos() {
+    let top = this.#offChart.pos.top - DOM.elementDimPos(this.#elDividers).top;
+        top = top - (this.height / 2)
+    this.#elDivider.style.top = `${top}px`
   }
 }

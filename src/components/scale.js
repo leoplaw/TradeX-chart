@@ -178,12 +178,19 @@ export default class ScaleBar {
   }
 
   setHeight(h) {
-    this.#elScale.style.height = h
+    this.#elScale.style.height = `${h}px`
   }
 
   setDimensions(dim) {
-    this.#viewport.setSize(this.width, dim.h)
+    const width = this.#elScale.clientWidth
+    this.#viewport.setSize(width, dim.h)
+    // adjust layers
+    this.#layerLabels.setSize(width, dim.h)
+    this.#layerOverlays.setSize(width, dim.h)
+    this.#layerCursor.setSize(width, dim.h)
+
     this.setHeight(dim.h)
+    this.draw(undefined, true)
   }
 
   defaultNode() {
@@ -278,6 +285,21 @@ export default class ScaleBar {
     this.#layerCursor.scene.clear()
     this.#viewport.render()
     return
+  }
+
+  resize(width=this.width, height=this.height) {
+    // adjust partent element
+    this.setDimensions({w: width, h: height})
+    // // adjust layers
+    // width -= this.#elScale.clientWidth
+    // this.#layerCursor.setSize(width, height)
+    // // adjust width for scroll buffer
+    // const buffer = this.config.buffer || BUFFERSIZE
+    //       width = Math.round(width * ((100 + buffer) * 0.01))
+    // this.#layerLabels.setSize(width, height)
+    // this.#layerOverlays.setSize(width, height)
+    // // render
+    // this.draw(undefined, true)
   }
 
 }
