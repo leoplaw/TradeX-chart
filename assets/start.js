@@ -1,7 +1,10 @@
 // const { Chart } = require("../dist/tradex-chart.es.js")
 // const state = require ('../data/data.json')
 import { Chart } from "../dist/tradex-chart.es.js"
-import state from '../assets/data.json'
+// import state from '../assets/data.json'
+fetch('https://tradex-app.github.io/TradeX-chart/data/data.json')
+.then((response) => response.json())
+.then((state) => {
 
 const mount = document.getElementById('test')
 const config = {
@@ -63,3 +66,5 @@ chart.on("chart_zoom", (e) => { infoBox.out(internals()) })
 chart.on("chart_pan", (e) => { infoBox.out(internals()) })
 infoBox.out(internals())
 // test()
+
+});
