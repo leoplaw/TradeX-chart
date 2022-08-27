@@ -1,4 +1,4 @@
-import * as talib from '../node_modules/talib-web/lib/index.cjs';
+import * as talib from '../node_modules/talib-web/lib/index.js';
 
 // DOM.js
 // DOM utilities
