@@ -1,4 +1,4 @@
-import * as talib from '../assets/node_modules/talib-web/lib/index.js';
+import * as talib from './node_modules/talib-web/lib/index.esm.js';
 
 // DOM.js
 // DOM utilities
@@ -48,11 +48,15 @@ const DOM = {
   // returns true if DOM element is visible
   // source (2018-03-11): https://github.com/jquery/jquery/blob/master/src/css/hiddenVisibleSelectors.js 
   isVisible(o) {
+    if (!this.isElement(o)) return false
+
     return !!o && !!( o.offsetWidth || o.offsetHeight || o.getClientRects().length )
   },
 
   // https://www.javascripttutorial.net/dom/css/check-if-an-element-is-visible-in-the-viewport/
   isInViewport(el) {
+    if (!this.isElement(el)) return false
+
     const rect = el.getBoundingClientRect();
     return (
         rect.top >= 0 &&
@@ -64,7 +68,8 @@ const DOM = {
 
   // https://stackoverflow.com/a/41698614/15109215
   isVisibleToUser(el) {
-    if (!(el instanceof Element)) throw Error('DomUtil: el is not an element.');
+    if (!this.isElement(el)) return false
+
     const style = getComputedStyle(elem);
     if (style.display === 'none') return false;
     if (style.visibility !== 'visible') return false;
@@ -108,11 +113,11 @@ const DOM = {
   },
 
   elementsDistance(el1, el2) {
+    // fail if either are not elements
+    if (!this.isElement(el1) || !this.isElement(el1)) return false
+
     el1Location = this.elementDimPos(el1);
     el2Location = this.elementDimPos(el2);
-
-    // fail if either are not elements
-    if (!el1Location || !el2Location) return false
 
     return {
       x: el1Location.top - el2Location.top,
@@ -145,6 +150,8 @@ const DOM = {
 
   //  https://stackoverflow.com/a/3028037/15109215
   hideOnClickOutside(el) {
+    if (!this.isElement(el)) return false
+
     const outsideClickListener = event => {
       if (!el.contains(event.target) && this.isVisible(el)) { 
       // or use: event.target.closest(selector) === null
@@ -162,6 +169,8 @@ const DOM = {
   },
 
   onClickOutside(el, cb) {
+    if (!this.isElement(el)) return false
+
     const outsideClickListener = event => {
       if (!el.contains(event.target) && DOM.isVisible(el)) { 
       // or use: event.target.closest(selector) === null
@@ -287,8 +296,10 @@ function copyDeep(obj) {
   return temp;
 }
 
-function uid(tag="id") {
-  if (!isString(tag)) tag = "ID";
+// unique ID
+function uid(tag="ID") {
+  if (isNumber(tag)) tag = tag.toString();
+  else if (!isString(tag)) tag = "ID";
   const dateString = Date.now().toString(36);
   const randomness = Math.random().toString(36).substring(2,5);
   return `${tag}_${dateString}_${randomness}`
@@ -304,6 +315,11 @@ function isArrayEqual(a1, a2) {
 
 // stateMachine.js
 
+/**
+ * Finite State Machine
+ * @export
+ * @class StateMachine
+ */
 class StateMachine {
 
   #id
@@ -313,11 +329,20 @@ class StateMachine {
   #config
   #mediator
   #status = "stopped"
+  #events
   #event
+  #eventData
   #actions
   #statuses = ["await", "idle", "running", "stopped"]
 
+  /**
+   * Instantiate state machine
+   * @param {object} config - state definition
+   * @param {object} mediator - module mediate provides event handling
+   */
   constructor(config, mediator) {
+    if (!StateMachine.validateConfig(config)) return false
+
     this.#id = config.id;
     this.#config = config;
     this.#state = config.initial;
@@ -325,11 +350,10 @@ class StateMachine {
     this.#actions = config.actions;
     this.#mediator = mediator;
 
-    if (!StateMachine.validateConfig) return false
-
     this.#subscribe();
   }
 
+  /** @type {string} */
   get id() { return this.#id }
   get state() { return this.#state }
   get previousSate() { return this.#statePrev }
@@ -337,10 +361,12 @@ class StateMachine {
   get mediator() { return this.#mediator }
   get status() { return this.#status }
   get event() { return this.#event }
+  get eventData() { return this.#eventData }
   get actions() { return this.#actions }
 
   notify(event, data) {
     this.#event = event;
+    this.#eventData = data;
     const currStateConfig = this.#config.states[this.#state];
       let destTransition = currStateConfig.on[event];
     if ( !destTransition 
@@ -348,16 +374,21 @@ class StateMachine {
       || this.#status !== "running") {
       return false
     }
+    let cond = destTransition?.condition?.type || destTransition?.condition || false;
+    if ( cond
+      && !this.condition.call(this, cond, destTransition.condition)) {
+      return false
+    }
     const destState = destTransition.target;
     const destStateConfig = this.#config.states[destState];
 
-    currStateConfig?.onExit(this, data);
-    destTransition.action(this, data);
+    currStateConfig?.onExit.call(this, data);
+    destTransition.action.call(this, data);
 
     this.#statePrev = this.#state;
     this.#state = destState;
 
-    destStateConfig?.onEnter(this, data);
+    destStateConfig?.onEnter.call(this, data);
 
     // null event - immediately transition (transient transition)
     if ( this.#config.states[destState]?.on
@@ -371,12 +402,12 @@ class StateMachine {
         // Do we have an array of conditions to check?
         if (isArray(transient)) {
           for (let transition of transient) {
-            let cond = transition?.condition.type || transition?.condition || false;
+            let cond = transition?.condition?.type || transition?.condition || false;
             if (
-                this.condition(cond, null, {cond}) 
+                this.condition.call(this, cond, transition.condition) 
                 && isString(transition.target)
               ) {
-              transition?.action(this, data);
+              transition?.action.call(this, data);
               this.#statePrev = this.#state;
               this.#state = transition?.target;
               this.notify(null, null);
@@ -385,12 +416,12 @@ class StateMachine {
         }
         // otherwise if only one condition
         else if (isObject(transient) && isString(transient.target)) {
-          let cond = transient?.condition.type || transient?.condition || false;
+          let cond = transient?.condition?.type || transient?.condition || false;
           if (
-              this.condition(cond, null, {cond}) 
+              this.condition.call(this, cond, transient.condition)
               && isString(transient.target)
             ) {
-            transient?.action(this, data);
+            transient?.action.call(this, data);
             this.#statePrev = this.#state;
             this.#state = transient.target;
             this.notify(null, null);
@@ -402,7 +433,7 @@ class StateMachine {
   }
 
   condition(cond, event=null, params={}) {
-    return (cond)? this.#config.guards[cond](this.#context, event, params) : false
+    return (cond)? this.#config.guards[cond].call(this, this.#context, event, params) : false
   }
 
   canTransition(event) {
@@ -410,23 +441,41 @@ class StateMachine {
     return event in currStateConfig.on
   }
 
+  /** commence state machine execution */
   start() { this.#status = "running"; }
+  /** stop state machine execution */
   stop() { this.#status = "stopped"; }
+  /** Expunge state and event listeners, free memory */
+  destroy() { 
+    this.#unsubscribe();
+    this.#config = null;
+  }
 
   #subscribe() {
-    const events = new Set();
+    this.#events = new Set();
 
     for (let state in this.#config.states) {
       for (let event in this.#config.states[state].on) {
-        events.add(event);
+        this.#events.add(event);
       }
     }
 
-    for (let event of events) {
-      this.#mediator.on(event, (data) => {this.notify(event, data);}, this.context);
+    for (let event of this.#events) {
+      this.#mediator.on(event, this.notify.bind(this, event), this.context);
     }
   }
 
+  #unsubscribe() {
+    for (let event of this.#events) {
+      this.#mediator.off(event, this.notify);
+    }
+  }
+
+  /**
+   * @static
+   * @param {object} c - state definition
+   * @returns {boolean} - valid true or false
+   */
   static validateConfig(c) {
     if (!isObject(c)) return false
 
@@ -437,11 +486,13 @@ class StateMachine {
 
     if (!(c.initial in c.states)) return false
 
-    for (state in c.states) {
-      if ("onEnter" in c.states[state] && !isFunction(c.states[state])) return false
-      if ("onExit" in c.states[state] && !isFunction(c.states[state])) return false
+    for (let state in c.states) {
+      if (!isObject(c.states[state])) return false
+      if ("onEnter" in c.states[state] && !isFunction(c.states[state].onEnter)) return false
+      if ("onExit" in c.states[state] && !isFunction(c.states[state].onExit)) return false
       if ("on" in c.states[state]) {
-        for (let event of c.states[state].on) {
+        for (let e in c.states[state].on) {
+          let event = c.states[state].on[e];
           if (!isString(event.target)) return false
           if ("action" in event && !isFunction(event.action)) return false
         }
@@ -912,7 +963,8 @@ const YAxisStyle = {
   FONTFAMILY: YAxisStyle_FONTFAMILY,
   FONTSIZE: YAxisStyle_FONTSIZE,
   FONTWEIGHT: YAxisStyle_FONTWEIGHT,
-  FONT_LABEL: `${YAxisStyle_FONTWEIGHT} ${YAxisStyle_FONTSIZE}px ${YAxisStyle_FONTFAMILY}`
+  FONT_LABEL: `${YAxisStyle_FONTWEIGHT} ${YAxisStyle_FONTSIZE}px ${YAxisStyle_FONTFAMILY}`,
+  FONT_LABEL_BOLD: `bold ${YAxisStyle_FONTSIZE}px ${YAxisStyle_FONTFAMILY}`
 };
 
 const XAxisStyle_FONTWEIGHT = "normal";
@@ -925,11 +977,18 @@ const XAxisStyle = {
   FONTFAMILY: XAxisStyle_FONTFAMILY,
   FONTSIZE: XAxisStyle_FONTSIZE,
   FONTWEIGHT: XAxisStyle_FONTWEIGHT,
-  FONT_LABEL: `${XAxisStyle_FONTWEIGHT} ${XAxisStyle_FONTSIZE}px ${XAxisStyle_FONTFAMILY}`
+  FONT_LABEL: `${XAxisStyle_FONTWEIGHT} ${XAxisStyle_FONTSIZE}px ${XAxisStyle_FONTFAMILY}`,
+  FONT_LABEL_BOLD: `bold ${YAxisStyle_FONTSIZE}px ${YAxisStyle_FONTFAMILY}`
 };
 
 const GridStyle = {
   COLOUR_GRID: "#333"
+};
+
+const PriceLineStyle = {
+  lineWidth: 1,
+  strokeStyle: "#ccc",
+  lineDash: [1,1]
 };
 
 const NAME = "TradeX-Chart";
@@ -947,6 +1006,7 @@ const CLASS_ROW       = "tradeXrow";
 const CLASS_GRID      = "tradeXgrid";
 const CLASS_CHART     = "tradeXchart";
 const CLASS_SCALE     = "tradeXscale";
+const CLASS_YAXIS     = "tradeXyAxis";
 const CLASS_MENUS     = "tradeXmenus";
 const CLASS_MENU      = "tradeXmenu";
 const CLASS_DIVIDERS  = "tradeXdividers";
@@ -955,6 +1015,19 @@ const CLASS_WINDOW    = "tradeXwindow";
 
 
 const RANGELIMIT = 500;
+
+const STREAM_NONE      = "stream_None";
+const STREAM_LISTENING = "stream_Listening";
+const STREAM_STARTED   = "stream_Started";
+const STREAM_STOPPED   = "stream_Stopped";
+const STREAM_ERROR     = "stream_Error";
+const STREAM_UPDATE    = "stream_candleUpdate";
+const STREAM_NEWVALUE  = "stream_candleNew";
+const STREAM_MAXUPDATE = 250;
+const STREAM_PRECISION = 8;
+
+const PRICE_PRECISION  = 2;
+const VOLUME_PRECISION = 2;
 
 // icons.js
 
@@ -977,9 +1050,23 @@ const line =
 const measure = 
   `<svg aria-hidden="true" width="46.08" height="46.08" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"> <path d="M 3.2758709,20.241377 11.758622,28.72413 28.72413,11.758622 20.241377,3.2758709 Z m 2.1206881,0 1.5905161,-1.590515 3.7112049,3.711203 1.060342,-1.060345 -3.7112027,-3.711204 1.0603441,-1.060344 2.1206876,2.12069 1.060346,-1.060346 -2.120689,-2.120688 1.060343,-1.060344 3.711203,3.711203 L 16,17.060346 l -3.711203,-3.711208 1.060341,-1.060341 2.12069,2.120687 1.060344,-1.060346 -2.120688,-2.120687 1.060344,-1.060343 3.711204,3.711205 1.060345,-1.060345 -3.711205,-3.7112046 1.060344,-1.0603441 2.120687,2.1206887 1.060346,-1.0603446 -2.120687,-2.1206883 1.590515,-1.5905161 6.362065,6.362063 -14.84482,14.84482 z" style="stroke-width:0.749776" /></svg>`;
 const range = 
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 28" width="28" height="28"><path fill-rule="evenodd" clip-rule="evenodd" d="M4.5 5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM2 6.5A2.5 2.5 0 0 1 6.95 6H24v1H6.95A2.5 2.5 0 0 1 2 6.5zM4.5 15a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM2 16.5a2.5 2.5 0 0 1 4.95-.5h13.1a2.5 2.5 0 1 1 0 1H6.95A2.5 2.5 0 0 1 2 16.5zM22.5 15a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm-18 6a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM2 22.5a2.5 2.5 0 0 1 4.95-.5H24v1H6.95A2.5 2.5 0 0 1 2 22.5z"></path><path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M22.4 8.94l-1.39.63-.41-.91 1.39-.63.41.91zm-4 1.8l-1.39.63-.41-.91 1.39-.63.41.91zm-4 1.8l-1.4.63-.4-.91 1.39-.63.41.91zm-4 1.8l-1.4.63-.4-.91 1.39-.63.41.91z"></path></svg>`;
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 28" width="28" height="28"><path  clip-rule="evenodd" d="M4.5 5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM2 6.5A2.5 2.5 0 0 1 6.95 6H24v1H6.95A2.5 2.5 0 0 1 2 6.5zM4.5 15a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM2 16.5a2.5 2.5 0 0 1 4.95-.5h13.1a2.5 2.5 0 1 1 0 1H6.95A2.5 2.5 0 0 1 2 16.5zM22.5 15a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm-18 6a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM2 22.5a2.5 2.5 0 0 1 4.95-.5H24v1H6.95A2.5 2.5 0 0 1 2 22.5z"></path><path fill="currentColor"  clip-rule="evenodd" d="M22.4 8.94l-1.39.63-.41-.91 1.39-.63.41.91zm-4 1.8l-1.39.63-.41-.91 1.39-.63.41.91zm-4 1.8l-1.4.63-.4-.91 1.39-.63.41.91zm-4 1.8l-1.4.63-.4-.91 1.39-.63.41.91z"></path></svg>`;
 const text = 
   `<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="46.08" height="46.08" viewBox="-51.2 -51.2 614.4 614.4"><path d="M231.359 147l-80.921 205h45.155l15.593-39.5h89.628l15.593 39.5h45.155l-80.921-205zm-3.594 123.5L256 198.967l28.235 71.533z"></path><path d="M384 56H128V16H16v112h40v256H16v112h112v-40h256v40h112V384h-40V128h40V16H384zM48 96V48h48v48zm48 368H48v-48h48zm288-40H128v-40H88V128h40V88h256v40h40v256h-40zm80-8v48h-48v-48zM416 48h48v48h-48z"></path></svg>`;
+
+
+  const close =
+  `<svg style="width: 46px; height: 46px" viewBox="-1.6 -1.6 19.2 19.2" xmlns="http://www.w3.org/2000/svg"> <path d="M 15,2 C 15,1.4477153 14.552285,1 14,1 H 2 C 1.4477153,1 1,1.4477153 1,2 v 12 c 0,0.552285 0.4477153,1 1,1 h 12 c 0.552285,0 1,-0.447715 1,-1 z M 0,2 C 0,0.8954305 0.8954305,0 2,0 h 12 c 1.104569,0 2,0.8954305 2,2 v 12 c 0,1.104569 -0.895431,2 -2,2 H 2 C 0.8954305,16 0,15.104569 0,14 Z" id="path2" /> <g id="g718" transform="translate(0,1.2499996)"> <path d="M 7.5010125,7.9560661 5.355012,10.103066 c -0.472,0.472 -1.18,-0.2360003 -0.708,-0.7080003 L 7.6470125,6.3950659 c 0.195364,-0.195858 0.512636,-0.195858 0.708,0 l 3.0000005,2.9999998 c 0.472,0.472 -0.236,1.1800003 -0.708,0.7080003 L 8.5010125,7.9560661 c -0.431103,-0.417289 -0.523896,-0.423024 -1,0 z" style="" id="path566-5" /> <path d="m 7.4989873,5.5439348 -2.1460003,-2.147 c -0.472,-0.472 -1.18,0.236 -0.708,0.708 l 3.0000003,3 c 0.1953639,0.195858 0.5126361,0.195858 0.708,0 l 2.9999997,-3 c 0.472,-0.472 -0.236,-1.18 -0.708,-0.708 l -2.1459997,2.147 c -0.4311027,0.417289 -0.5238956,0.423024 -1,0 z" style="" id="path566-6-3" /> </g></svg>`;
+ const up =
+  `<svg style="width: 46px; height: 46px" viewBox="-1.6 -1.6 19.2 19.2" xmlns="http://www.w3.org/2000/svg"> <path d="M 15,2 C 15,1.4477153 14.552285,1 14,1 H 2 C 1.4477153,1 1,1.4477153 1,2 v 12 c 0,0.552285 0.4477153,1 1,1 h 12 c 0.552285,0 1,-0.447715 1,-1 z M 0,2 C 0,0.8954305 0.8954305,0 2,0 h 12 c 1.104569,0 2,0.8954305 2,2 v 12 c 0,1.104569 -0.895431,2 -2,2 H 2 C 0.8954305,16 0,15.104569 0,14 Z" id="path2" /> <path d="m 7.4989873,7.7026182 -2.1460003,2.147 c -0.472,0.4719998 -1.18,-0.236 -0.708,-0.708 l 3.0000003,-3 c 0.1953639,-0.1958581 0.5126361,-0.1958581 0.708,0 l 2.9999997,3 c 0.472,0.472 -0.236,1.1799998 -0.708,0.708 l -2.1459997,-2.147 c -0.4311027,-0.417289 -0.5238956,-0.423024 -1,0 z" style="" id="path566-6-3" /></svg>`;
+ const down =
+  `<svg style="width: 46px; height: 46px" viewBox="-1.6 -1.6 19.2 19.2" xmlns="http://www.w3.org/2000/svg"> <path d="M 15,2 C 15,1.4477153 14.552285,1 14,1 H 2 C 1.4477153,1 1,1.4477153 1,2 v 12 c 0,0.552285 0.4477153,1 1,1 h 12 c 0.552285,0 1,-0.447715 1,-1 z M 0,2 C 0,0.8954305 0.8954305,0 2,0 h 12 c 1.104569,0 2,0.8954305 2,2 v 12 c 0,1.104569 -0.895431,2 -2,2 H 2 C 0.8954305,16 0,15.104569 0,14 Z" id="path2" /> <path d="m 7.4989873,8.2973819 -2.1460003,-2.147 c -0.472,-0.472 -1.18,0.236 -0.708,0.708 l 3.0000003,3 c 0.1953639,0.1958581 0.5126361,0.1958581 0.708,0 l 2.9999997,-3 c 0.472,-0.472 -0.236,-1.18 -0.708,-0.708 l -2.1459997,2.147 c -0.4311027,0.417289 -0.5238956,0.423024 -1,0 z" style="" id="path566-6-3" /></svg>`;
+ const restore =
+  `<svg style="width: 46px; height: 46px" viewBox="-1.6 -1.6 19.2 19.2" xmlns="http://www.w3.org/2000/svg"> <path d="M 15,2 C 15,1.4477153 14.552285,1 14,1 H 2 C 1.4477153,1 1,1.4477153 1,2 v 12 c 0,0.552285 0.4477153,1 1,1 h 12 c 0.552285,0 1,-0.447715 1,-1 z M 0,2 C 0,0.8954305 0.8954305,0 2,0 h 12 c 1.104569,0 2,0.8954305 2,2 v 12 c 0,1.104569 -0.895431,2 -2,2 H 2 C 0.8954305,16 0,15.104569 0,14 Z" id="path2" /> <g id="g687" transform="translate(15.647255,-0.0288128)"> <path d="m -8.1462425,10.484879 -2.1460005,2.146999 c -0.472,0.472 -1.18,-0.236 -0.708,-0.708 l 3.0000005,-2.9999994 c 0.195364,-0.195858 0.512636,-0.195858 0.708,0 l 3.0000005,2.9999994 c 0.472,0.472 -0.236,1.18 -0.708,0.708 l -2.1460005,-2.146999 c -0.431103,-0.417289 -0.523896,-0.423024 -1,0 z" style="" id="path566-5" /> <path d="m -8.1482677,5.5727476 -2.1460003,-2.147 c -0.472,-0.472 -1.18,0.236 -0.708,0.708 l 3.0000003,3 c 0.1953639,0.195858 0.5126361,0.195858 0.708,0 l 2.9999997,-3 c 0.472,-0.472 -0.236,-1.18 -0.708,-0.708 l -2.1459997,2.147 c -0.4311027,0.417289 -0.5238956,0.423024 -1,0 z" style="" id="path566-6-3" /> </g></svg>`;
+ const maximize =
+  `<svg style="width: 46px; height: 46px" viewBox="-1.6 -1.6 19.2 19.2" xmlns="http://www.w3.org/2000/svg"> <path d="M 15,2 C 15,1.4477153 14.552285,1 14,1 H 2 C 1.4477153,1 1,1.4477153 1,2 v 12 c 0,0.552285 0.4477153,1 1,1 h 12 c 0.552285,0 1,-0.447715 1,-1 z M 0,2 C 0,0.8954305 0.8954305,0 2,0 h 12 c 1.104569,0 2,0.8954305 2,2 v 12 c 0,1.104569 -0.895431,2 -2,2 H 2 C 0.8954305,16 0,15.104569 0,14 Z" id="path2" /> <g id="g611" transform="translate(0.2050748,-0.8829888)"> <path d="m 7.2959375,11.933818 -2.146,-2.1469999 c -0.472,-0.4719998 -1.18,0.2359999 -0.708,0.7079999 l 3,3 c 0.195364,0.195858 0.512636,0.195858 0.708,0 l 3.0000005,-3 c 0.472,-0.472 -0.236,-1.1799997 -0.708,-0.7079999 L 8.2959375,11.933818 c -0.431103,0.417289 -0.523896,0.423024 -1,0 z" style="" id="path566" /> <path d="m 7.2939123,5.8321596 -2.146,2.147 c -0.4719998,0.472 -1.1799998,-0.236 -0.708,-0.708 l 3,-3 c 0.1953639,-0.195858 0.5126361,-0.195858 0.708,0 l 2.9999997,3 c 0.472,0.472 -0.236,1.18 -0.708,0.708 l -2.1459997,-2.147 c -0.4311027,-0.417289 -0.5238956,-0.423024 -1,0 z" style="" id="path566-6" /> </g></svg>`;
+ const collapse =
+  `<svg style="width: 46px; height: 46px" viewBox="-1.6 -1.6 19.2 19.2" xmlns="http://www.w3.org/2000/svg"> <path d="M 15,2 C 15,1.4477153 14.552285,1 14,1 H 2 C 1.4477153,1 1,1.4477153 1,2 v 12 c 0,0.552285 0.4477153,1 1,1 h 12 c 0.552285,0 1,-0.447715 1,-1 z M 0,2 C 0,0.8954305 0.8954305,0 2,0 h 12 c 1.104569,0 2,0.8954305 2,2 v 12 c 0,1.104569 -0.895431,2 -2,2 H 2 C 0.8954305,16 0,15.104569 0,14 Z" id="path2" /> <path d="m 11.500447,8.5 c 0.666666,0 0.666666,-1 0,-1 H 4.444275 c -0.1571231,0 -0.224029,0.07336 -0.2978281,0.1459999 -0.1958579,0.195364 -0.1958579,0.5126361 0,0.7080001 0,0 0.113806,0.146 0.320186,0.146 z" style="" id="path887" /></svg>`;
 
 // utils.js
 
@@ -1004,15 +1091,6 @@ var utilsList = [
     // }
   },
   {
-    id: "settings",
-    name: "Settings", 
-    icon: config, 
-    event: "utils_settings",
-    // action: (e, mediator) => {
-    //   mediator.emit("utils_settings", e)
-    // }
-  },
-  {
     id: "screenshot",
     name: "Screenshot", 
     icon: camera, 
@@ -1021,6 +1099,16 @@ var utilsList = [
     //   mediator.emit("utils_screenshot", e)
     // }
   },
+  {
+    id: "settings",
+    name: "Settings", 
+    icon: config, 
+    event: "utils_settings",
+    // action: (e, mediator) => {
+    //   mediator.emit("utils_settings", e)
+    // }
+  },
+
   // {name: "Save", icon: "./assets/svg/", event: "utils_save", action: () => {}},
   // {name: "Load", icon: "./assets/svg/", action: () => {}},
   // {name: "Refresh", icon: "./assets/svg/", action: () => {}},
@@ -1055,7 +1143,7 @@ function renderPath (ctx, coordinates, style, strokeFill) {
   }
   ctx.strokeStyle = style.strokeStyle;
 
-  if ("dash" in style) ctx.setLineDash(style.dash);
+  if ("lineDash" in style) ctx.setLineDash(style.lineDash);
   
   ctx.beginPath();
   let move = true;
@@ -1073,6 +1161,23 @@ function renderPath (ctx, coordinates, style, strokeFill) {
   ctx.restore();
 }
 
+// line.js
+
+/**
+ * Draw a horizontal straight line
+ * @param ctx
+ * @param y
+ * @param left
+ * @param right
+ */
+function renderHorizontalLine (ctx, y, left, right, style) {
+  const coordinates = [{x:left, y:y}, {x:right, y:y}];
+  renderPath(ctx, coordinates, style, () => {
+    ctx.stroke();
+    ctx.closePath();
+  });
+}
+
 /**
  * Render line - open path
  * @param ctx
@@ -1087,34 +1192,172 @@ function renderLine (ctx, coordinates, style) {
 
 // indicator.js
 
+const T$1 = 0, C$1 = 4;
+
+/**
+ * Base class for on and off chart indicators
+ * @export
+ * @class indicator
+ */
 class indicator {
 
+  #core
   #target
   #scene
   #config
   #xAxis
   #yAxis
+  #overlay
   #indicator
   #type
+  #TALib
+  #range
+  #value = [0, 0]
+  #newValueCB
+  #updateValueCB
+  #precision = 2
+  #calcParams
+  #style = {}
 
-  constructor(target, xAxis, yAxis, config) {
+  constructor(target, overlay, xAxis, yAxis, config) {
 
+    this.#core = xAxis.core;
+    this.#config = config;
     this.#target = target;
     this.#scene = target.scene;
-    this.#config = config;
     this.#xAxis = xAxis;
     this.#yAxis = yAxis;
-    this.#indicator = config.indicator;
+    this.#overlay = overlay;
     this.#type = config.type;
+    this.#indicator = config.indicator;
+    this.#TALib = xAxis.core.TALib;
+    this.#range = xAxis.range;
+
+    this.eventsListen();
   }
 
+  get core() { return this.#core }
+  get config() { return this.#config }
   get target() { return this.#target }
   get scene() { return this.#scene }
   get xAxis() { return this.#xAxis }
   get yAxis() { return this.#yAxis }
   get type() { return this.#type }
+  get overlay() { return this.#overlay }
   get indicator() { return this.#indicator }
+  get TALib() { return this.#TALib }
+  get range() { return this.#range }
+  set setNewValue(cb) { this.#newValueCB = cb;}
+  set setUpdateValue(cb) { this.#updateValueCB = cb; }
+  set precision(p) { this.#precision = p; }
+  get precision() { return this.#precision }
+  set calcParams(p) { this.#calcParams = p; }
+  get calcParams() { return this.#calcParams }
+  set style(s) { this.#style = s; }
+  get style() { return this.#style }
 
+
+  set value(data) {
+    // round time to nearest current time unit
+    const tfms = this.core.time.timeFrameMS;
+    let roundedTime = Math.floor(new Date(data[T$1]) / tfms) * tfms;
+    data[T$1] = roundedTime;
+
+    if (this.#value[T$1] !== data[T$1]) {
+      this.#value[T$1] = data[T$1];
+      this.#newValueCB(data);
+    }
+    else {
+      this.#updateValueCB(data);
+    }
+  }
+  get value() {
+    return this.#value
+  }
+
+  end() {
+    // this.off(STREAM_NEWVALUE, this.onStreamNewValue)
+    this.off(STREAM_UPDATE, this.onStreamUpdate);
+  }
+
+  eventsListen() {
+    // this.on(STREAM_NEWVALUE, this.onStreamNewValue.bind(this))
+    this.on(STREAM_UPDATE, this.onStreamUpdate.bind(this));
+  }
+
+  on(topic, handler, context) {
+    this.core.on(topic, handler, context);
+  }
+
+  off(topic, handler) {
+    this.core.off(topic, handler);
+  }
+
+  emit(topic, data) {
+    this.core.emit(topic, data);
+  }
+
+  onStreamNewValue(value) {
+    // this.value = value
+    console.log("onStreamNewValue(value):",value);
+  }
+
+  onStreamUpdate(candle) {
+    // console.log("onStreamUpdate(candle):", candle)
+    this.value = candle;
+  }
+
+  indicatorInput(start, end) {
+    let input = [];
+    do {
+      input.push(this.range.value(start)[C$1]);
+    }
+    while (start++ < end)
+    return input
+  }
+
+    /**
+   * Calculate indicator values for entire chart history
+   * @param {string} indicator - the TALib function to call
+   * @param {object} params - parameters for the TALib function
+   * @returns {boolean} - success or failure
+   */
+     calcIndicator (indicator, params) {
+      this.overlay.data = [];
+      let step = this.calcParams[0];
+      // fail if there is not enough data to calculate
+      if (this.range.Length < step) return false
+  
+      let end, entry, time;
+      let start = 0;
+      let input = this.indicatorInput(start, this.range.Length - 1);
+      let hasNull = input.find(element => element === null);
+      if (hasNull) return false
+      
+      do {
+        end = start + step;
+        input.slice(start, end);
+        entry = this.TALib[indicator](params);
+        time = this.range.value(end - 1)[0];
+        this.overlay.data.push([time, entry]);
+        start++;
+      } 
+      while (end < this.range.Length)
+      return true
+    }
+  
+    /**
+     * Calculate indicator value for current stream candle
+     * @param {string} indicator - the TALib function to call
+     * @param {object} params - parameters for the TALib function
+     * @returns {array} - indicator data entry
+     */
+    calcIndicatorStream (indicator, params) {
+      let entry = this.TALib[indicator](params);
+      let end = this.range.dataLength;
+      let time = this.range.value(end)[0];
+      return [time, entry.output[0]]
+    }
 
   plot(plots, type, style) {
 
@@ -1132,22 +1375,114 @@ class indicator {
 
 // definitions/chart.js
 
+const SECOND = 1000;
+const MINUTE = SECOND * 60;
+const DEFAULT_TIMEINTERVAL = MINUTE;
+const DEFAULT_TIMEFRAME = "1m";
+const DEFAULT_TIMEFRAMEMS = DEFAULT_TIMEINTERVAL;
+
 const PRICEDIGITS$1 = 6;
 
 const XAXIS_ZOOM$1 = 0.05;
 
 const YAXIS_STEP = 100;
+const YAXIS_GRID = 16;
 const YAXIS_TYPES = ["default", "percent", "log"];
+const YAXIS_BOUNDS = 0.005;
 
 const LIMITFUTURE = 200;
 const LIMITPAST = 200;
 const MINCANDLES = 20;
-const MAXGRADSPER = 100;
-const BUFFERSIZE = 20;  // %
+const MAXGRADSPER = 75;
+const BUFFERSIZE$1 = 20;  // %
 
 const ROWMINHEIGHT = 50; // px
 const OFFCHARTDEFAULTHEIGHT = 30; // %
 const DIVIDERHEIGHT = 8; // px
+
+// DMI.js
+
+class DMI extends indicator {
+  #ID
+  #name = 'Directional Movement Index'
+  #shortName = 'DMI'
+  #onChart = false
+  #precision = 2
+  #calcParams = [20]
+  #checkParamCount = false
+  #scaleOverlay = true
+  #plots = [
+    { key: 'DMI_1', title: ' ', type: 'line' },
+  ]
+  #defaultStyle = {
+    strokeStyle: "#C80",
+    lineWidth: '1',
+    defaultHigh: 75,
+    defaultLow: 25,
+    highLowLineWidth: 1,
+    highLowStyle: "dashed",
+    highStrokeStyle: "#848",
+    lowStrokeStyle: "#848",
+    highLowRangeStyle: "#22002220"
+  }
+  #style = {}
+
+  // YAXIS_TYPES - percent
+  static scale = YAXIS_TYPES[1]
+
+  /**
+ * Creates an instance of DMI.
+ * @param {object} target - canvas scene
+ * @param {object} overlay - data for the overlay
+ * @param {instance} xAxis - timeline axis
+ * @param {instance} yAxis - scale axis
+ * @param {object} config - theme / styling
+ * @memberof DMI
+ */
+  constructor(target, overlay, xAxis, yAxis, config) {
+    super(target, xAxis, yAxis, config);
+
+    this.#ID = uid(this.#shortName);
+    this.style = {...this.defaultStyle, ...config.style};
+  }
+
+  get ID() { return this.#ID }
+  get name() { return this.#name }
+  get shortName() { return this.#shortName }
+  get onChart() { return this.#onChart }
+  get style() { return this.#style }
+  get plots() { return this.#plots }
+
+  indicatorStream() {
+    // return indicator stream
+  }
+
+  calcIndicator(input) {
+    this.overlay.data = this.TALib.DMI(input);
+  }
+
+  regeneratePlots (params) {
+    return params.map((_, index) => {
+      const num = index + 1;
+      return { key: `dmi${num}`, title: `DMI${num}: `, type: 'line' }
+    })
+  }
+
+  updateIndicator (input) {
+
+  }
+
+  draw(range) {
+    this.scene.clear();
+
+    this.overlay.data;
+    this.xAxis.candleW;
+    this.scene.width + (this.xAxis.bufferPx * 2);
+    this.yAxis.yPos(100 - this.style.defaultHigh);
+    this.yAxis.yPos(100 - this.style.defaultLow);
+
+  }
+}
 
 // number.js
 
@@ -1165,7 +1500,7 @@ function getRandomIntBetween(min, max) {
  *
  * @export
  * @param {number} value
- * @return {*}  
+ * @return {number}  
  */
 function countDigits(value) {
   const digits = {};
@@ -1242,30 +1577,40 @@ function power (base, exponent) {
 }
 
 /**
+ * limit number to a range
+ * @param {number} val
+ * @param {number} min
+ * @param {number} max
+ * @return {number}  
+ */
+function limit(val, min, max) {
+  return Math.min(max, Math.max(min, val));
+}
+
+/**
  * EMA
  */
  
  class EMA extends indicator {
-  name ='Exponential Moving Average'
-  shortName = 'EMA'
-  onChart = true
-  series = 'price'
-  calcParams = [6, 12, 20]
-  precision = 2
-  shouldCheckParamCount = false
-  shouldOhlc = true
-  plots = [
+  #ID
+  #name ='Exponential Moving Average'
+  #shortName = 'EMA'
+  #onChart = true
+  #series = 'price'
+  #precision = 2
+  #calcParams = [6, 12, 20]
+  #checkParamCount = false
+  #scaleOverlay = false
+  #plots = [
     { key: 'ema6', title: 'EMA6: ', type: 'line' },
     { key: 'ema12', title: 'EMA12: ', type: 'line' },
     { key: 'ema20', title: 'EMA20: ', type: 'line' }
   ]
-  defaultStyle = {
+  #defaultStyle = {
     strokeStyle: "#C80",
     lineWidth: '1'
   }
-  style = {}
-  overlay
-  TALib
+  #style = {}
 
   // YAXIS_TYPES - default
   static scale = YAXIS_TYPES[0]
@@ -1283,24 +1628,29 @@ function power (base, exponent) {
   constructor(target, overlay, xAxis, yAxis, config) {
     super(target, xAxis, yAxis, config);
 
-    this.overlay = overlay;
-    this.style = config.style || this.defaultStyle;
-    this.TALib = xAxis.mediator.api.core.TALib;
+    this.#ID = uid(this.#shortName);
+    this.#style = {...this.#defaultStyle, ...config.style};
   }
+
+  get ID() { return this.#ID }
+  get name() { return this.#name }
+  get shortName() { return this.#shortName }
+  get onChart() { return this.#onChart }
+  get style() { return this.#style }
+  get plots() { return this.#plots }
 
   calcIndicator(input) {
-    this.overlay.data = this.TALib.EMA(input);
+    this.overlay.data = this.TAlib.Indicators.EMA.ema(input);
   }
-
-
-
-
-
 
   regeneratePlots (params) {
     return params.map(p => {
       return { key: `ema${p}`, title: `EMA${p}: `, type: 'line' }
     })
+  }
+
+  updateIndicator (input) {
+
   }
 
   calcTechnicalIndicator (dataList, { params, plots }) {
@@ -1361,17 +1711,26 @@ function power (base, exponent) {
 }
 
 // RSI.js
+const calcParams = [20];
 
+
+/**
+ * Indicator - Relative Strength Index
+ * @export
+ * @class RSI
+ * @extends {indicator}
+ */
 class RSI extends indicator {
-  name = 'Relative Strength Index'
-  shortName = 'RSI'
-  onChart = false
-  calcParams = [20]
-  checkParamCount = false
-  plots = [
+  #ID
+  #name = 'Relative Strength Index'
+  #shortName = 'RSI'
+  #onChart = false
+  #checkParamCount = false
+  #scaleOverlay = true
+  #plots = [
     { key: 'RSI_1', title: ' ', type: 'line' },
   ]
-  defaultStyle = {
+  #defaultStyle = {
     strokeStyle: "#C80",
     lineWidth: '1',
     defaultHigh: 75,
@@ -1382,9 +1741,6 @@ class RSI extends indicator {
     lowStrokeStyle: "#848",
     highLowRangeStyle: "#22002220"
   }
-  style = {}
-  overlay
-  TALib
 
   // YAXIS_TYPES - percent
   static scale = YAXIS_TYPES[1]
@@ -1399,17 +1755,21 @@ class RSI extends indicator {
    * @param {object} config - theme / styling
    * @memberof RSI
    */
-  constructor(target, overlay, xAxis, yAxis, config) {
-    super(target, xAxis, yAxis, config);
+  constructor (target, overlay, xAxis, yAxis, config) {
+    super (target, overlay, xAxis, yAxis, config);
 
-    this.overlay = overlay;
-    this.style = {...this.defaultStyle, ...config.style};
-    this.TALib = xAxis.mediator.api.core.TALib;
+    this.#ID = overlay?.id || uid(this.#shortName);
+    this.calcParams = (overlay?.calcParams) ? JSON.parse(overlay.calcParams) : calcParams;
+    this.style = (overlay?.settings) ? {...this.#defaultStyle, ...overlay.settings} : {...this.#defaultStyle, ...config.style};
+    this.setNewValue = (value) => { this.newValue(value); };
+    this.setUpdateValue = (value) => { this.UpdateValue(value); };
   }
 
-  calcIndicator(input) {
-    this.overlay.data = this.TALib.EMA(input);
-  }
+  get ID() { return this.#ID }
+  get name() { return this.#name }
+  get shortName() { return this.#shortName }
+  get onChart() { return this.#onChart }
+  get plots() { return this.#plots }
 
   regeneratePlots (params) {
     return params.map((_, index) => {
@@ -1418,6 +1778,56 @@ class RSI extends indicator {
     })
   }
 
+  /**
+   * process stream and create new indicator data entry
+   * @param {array} value - current stream candle 
+   * @memberof RSI
+   */
+  newValue (value) {
+    let p = this.TALibParams();
+    if (!p) return false
+
+    let v = this.calcIndicatorStream(this.#shortName, this.TALibParams());
+    if (!v) return false
+
+    this.overlay.data.push([v[0], v[1]]);
+
+    this.target.setPosition(this.core.scrollPos, 0);
+    this.draw(this.range);
+  }
+
+  /**
+   * process stream and update current (last) indicator data entry
+   * @param {array} value - current stream candle 
+   * @memberof RSI
+   */
+  UpdateValue (value) {
+    let l = this.overlay.data.length - 1;
+    let p = this.TALibParams();
+    if (!p) return false
+
+    let v = this.calcIndicatorStream(this.#shortName, p);
+    if (!v) return false
+
+    this.overlay.data[l] = [v[0], v[1]];
+
+    this.target.setPosition(this.core.scrollPos, 0);
+    this.draw(this.range);
+
+    // console.log(`RSI stream input update: ${value}`)
+
+  }
+
+  TALibParams() {
+    let end = this.range.dataLength;
+    let step = this.calcParams[0];
+    let start = end - step;
+    let input = this.indicatorInput(start, end);
+    let hasNull = input.find(element => element === null);
+    if (hasNull) return false
+    else return { inReal: input, timePeriod: step }
+  }
+ 
   calcTechnicalIndicator (dataList, { params, plots }) {
     const sumCloseAs = [];
     const sumCloseBs = [];
@@ -1451,6 +1861,10 @@ class RSI extends indicator {
     })
   }
 
+  /**
+   * Draw the current indicator range on its canvas layer and render it.
+   * @param {object} range 
+   */
   draw(range) {
     this.scene.clear();
 
@@ -1524,8 +1938,8 @@ class RSI extends indicator {
 var Indicators = {
   ADX: {id: "ADX", name: "Average Direction", event: "addIndicator"},
   BB: {id: "BB", name: "Bollinger Bands", event: "addIndicator", ind: ""},
+  DMI: {id: "DMI", name: "Directional Movement", event: "addIndicator", ind: DMI},
   EMA: {id: "EMA", name: "Exponential Moving Average", event: "addIndicator", ind: EMA},
-  DMI: {id: "DMI", name: "Directional Movement", event: "addIndicator", },
   RSI: {id: "RSI", name: "Relative Strength Index", event: "addIndicator", ind: RSI},
 };
 
@@ -1583,6 +1997,7 @@ class UtilsBar {
   }
 
   end() {
+    this.#mediator.stateMachine.destroy();
     // remove event listeners
     const api = this.#mediator.api;
     const utils = DOM.findBySelectorAll(`#${api.id} .${CLASS_UTILS} .icon-wrapper`);
@@ -1593,15 +2008,19 @@ class UtilsBar {
           util.removeEventListener("click", this.onIconClick);
       }
     }
+
+    this.off("utils_indicators", this.onIndicators);
+    this.off("utils_timezone", this.onTimezone);
+    this.off("utils_settings", this.onSettings);
+    this.off("utils_screenshot", this.onScreenshot);
   }
 
   eventsListen() {
-    this.on("utils_indicators", (e) => { this.onIndicators(e); });
-    this.on("utils_timezone", (e) => { this.onTimezone(e); });
-    this.on("utils_settings", (e) => { this.onSettings(e); });
-    this.on("utils_screenshot", (e) => { this.onScreenshot(e); });
+    this.on("utils_indicators", this.onIndicators.bind(this));
+    this.on("utils_timezone", this.onTimezone.bind(this));
+    this.on("utils_settings", this.onSettings.bind(this));
+    this.on("utils_screenshot", this.onScreenshot.bind(this));
     // this.on("resize", (dimensions) => this.onResize.bind(this))
-
   }
   
   on(topic, handler, context) {
@@ -1671,12 +2090,14 @@ class UtilsBar {
   }
 
   defaultNode() {
-    let utilsBar = "";
+    // let utilsBar = ""
+    let style = `display: inline-block; float: right;`;
+    let utilsBar = `<div style="${style}">`;
     for (const util of this.#utils) {
       utilsBar += this.iconNode(util);
     }
 
-    return utilsBar
+    return utilsBar + "</div>"
   }
 
   iconNode(util) {
@@ -1708,1740 +2129,6 @@ class UtilsBar {
   }
 
 
-}
-
-// tools.js
-
-var tools = [
-  {
-    id: "cursor",
-    name: "Cursor",
-    icon: cursor,
-    event: "tools_cursor",
-    action: (e, mediator) => {
-      console.log("Cursor Selected");
-    },
-  },
-  {
-    id: "line",
-    name: "Line",
-    icon: line,
-    event: "tools_line",
-    action: (e, mediator) => {
-      console.log("Line tool");
-    },
-    sub: [
-      {
-        id: "ray",
-        name: "Ray",
-        icon: line,
-        event: "tools_ray",
-        action: (e, mediator) => {
-          console.log("Ray Selected");
-        },
-      },
-      {
-        id: "hRay",
-        name: "Horizontal Ray",
-        icon: line,
-        event: "tools_horizonalRay",
-        action: (e, mediator) => {
-          console.log("Horizontal Ray Selected");
-        },
-      },
-      {
-        id: "vRay",
-        name: "Vertical Ray",
-        icon: line,
-        event: "tools_verticalRay",
-        action: (e, mediator) => {
-          console.log("Vertical Ray Selected");
-        },
-      },
-    ]
-  },
-  {
-    id: "fibonacci",
-    name: "Fibonacci",
-    icon: fibonacci,
-    event: "tools_fibonacci",
-    action: (e, mediator) => {
-      console.log("Fibonacci tool");
-    },
-    sub: []
-  },
-  {
-    id: "range",
-    name: "Range",
-    icon: range,
-    event: "tools_range",
-    action: (e, mediator) => {
-      console.log("Range tool");
-    },
-    sub: []
-  },
-  {
-    id: "text",
-    name: "Text",
-    icon: text,
-    event: "tools_text",
-    action: (e, mediator) => {
-      console.log("Text tool");
-    },
-    sub: []
-  },
-  {
-    id: "measure",
-    name: "Measure",
-    icon: measure,
-    event: "tools_measure",
-    action: (e, mediator) => {
-      console.log("Measure tool");
-    },
-  },
-  {
-    id: "delete",
-    name: "Delete",
-    icon: del,
-    event: "tools_delete",
-    action: (e, mediator) => {
-      console.log("Delete tool");
-    },
-  }
-];
-
-// tools.js
-
-class ToolsBar {
-
-  #name = "Toolbar"
-  #shortName = "tools"
-  #mediator
-  #options
-  #elTools
-  #tools
-  #widgets
-
-
-  constructor (mediator, options) {
-
-    this.#mediator = mediator;
-    this.#options = options;
-    this.#elTools = mediator.api.elements.elTools;
-    this.#tools = tools || options.tools;
-    this.#widgets = this.#mediator.api.core.WidgetsG;
-    this.init();
-  }
-
-  log(l) { this.#mediator.log(l); }
-  info(i) { this.#mediator.info(i); }
-  warning(w) { this.#mediator.warn(w); }
-  error(e) { this.#mediator.error(e); }
-
-  get name() {return this.#name}
-  get shortName() {return this.#shortName}
-  get mediator() {return this.#mediator}
-  get options() {return this.#options}
-  get pos() { return this.dimensions }
-  get dimensions() { return DOM.elementDimPos(this.#elTools) }
-
-  init() {
-    this.mount(this.#elTools);
-
-    this.log(`${this.#name} instantiated`);
-  }
-
-
-  start() {
-    this.initAllTools();
-
-    // set up event listeners
-    this.eventsListen();
-  }
-
-  end() {
-    // remove event listeners
-    const api = this.#mediator.api;
-    const tools = DOM.findBySelectorAll(`#${api.id} .${CLASS_TOOLS} .icon-wrapper`);
-    for (let tool of tools) {
-      for (let t of this.#tools) {
-        if (t.id === id)
-          tool.removeEventListener("click", this.onIconClick);
-      }
-    }
-  }
-
-  eventsListen() {
-    // this.on("utils_indicators", (e) => { this.onIndicators(e) })
-    // this.on("utils_timezone", (e) => { this.onTimezone(e) })
-    // this.on("utils_settings", (e) => { this.onSettings(e) })
-    // this.on("utils_screenshot", (e) => { this.onScreenshot(e) })
-    // this.on("resize", (dimensions) => this.onResize.bind(this))
-
-  }
-
-  on(topic, handler, context) {
-    this.#mediator.on(topic, handler, context);
-  }
-
-  off(topic, handler) {
-    this.#mediator.off(topic, handler);
-  }
-
-  emit(topic, data) {
-    this.#mediator.emit(topic, data);
-  }
-
-  onIconClick(e) {
-    let evt = e.currentTarget.dataset.event,
-        menu = e.currentTarget.dataset.menu || false,
-        data = {
-          target: e.currentTarget.id,
-          menu: menu,
-          evt: e.currentTarget.dataset.event
-        };
-        
-    this.emit(evt, data);
-
-    if (menu) this.emit("openMenu", data);
-    else {
-      this.emit("menuItemSelected", data);
-      this.emit("toolSelected", data);
-    }
-  }
-
-
-  mount(el) {
-    el.innerHTML = this.defaultNode();
-  }
-
-  initAllTools() {
-    const api = this.#mediator.api;
-    const tools = DOM.findBySelectorAll(`#${api.id} .${CLASS_TOOLS} .icon-wrapper`);
-    for (let tool of tools) {
-
-      let id = tool.id.replace('TX_', ''),
-          svg = tool.querySelector('svg');
-          svg.style.fill = ToolsStyle.COLOUR_ICON;
-          svg.style.width = "90%";
-
-
-      for (let t of this.#tools) {
-        if (t.id === id) {
-          tool.addEventListener("click", this.onIconClick.bind(this));
-          if (t?.sub) {
-            let config = {
-              content: t.sub,
-              primary: tool
-            };
-            let menu = this.#widgets.insert("Menu", config);
-            tool.dataset.menu = menu.id;
-            menu.start();
-          }
-        }
-      }
-    }
-  }
-
-  defaultNode() {
-    let toolbar = "";
-    for (const tool of this.#tools) {
-      toolbar += this.iconNode(tool);
-    }
-
-    return toolbar
-  }
-
-  iconNode(tool) {
-    const iconStyle = `display: inline-block; height: ${this.#elTools.clientWidth}px; padding-right: 2px`;
-    const menu = ("sub" in tool) ? `data-menu="true"` : "";
-    return  `
-      <div id="TX_${tool.id}" data-event="${tool.event}" ${menu} class="icon-wrapper" style="${iconStyle}">${tool.icon}</div>\n
-    `
-  }
-
-}
-
-// axis.js
-
-class Axis {
-
-  // chart
-
-  constructor(chart) {
-    // this.chart = chart
-  }
-
-  get width() { return this.chart.width }
-  get height() { return this.chart.height }
-  get data() { return this.chart.data }
-  get range() { return this.chart.range }
-  get yDigits() { return this.chart.yAxisDigits }
-
-  float2Int(value) { return float2Int(value) }
-  numDigits(value) { return numDigits(value) }
-  countDigits(value) { return countDigits(value) }
-  precision(value) { return precision(value) }
-
-}
-
-const TIMEUNITS = ['y','M','d','h','m','s','ms'];
-const TIMEUNITSLONG = ['years','months','days','hours','minutes','seconds','milliseconds'];
-const dayCntInc = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-const dayCntLeapInc = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335];
-const monthDayCnt = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 ];
-
-// BTC Genesis Block: 03/01/2009, 19:15:05
-const BTCGENESIS = 1231006505000;
-const SECOND_MS = 1000;
-const MINUTE_MS = SECOND_MS*60;
-const HOUR_MS = MINUTE_MS*60;
-const DAY_MS = HOUR_MS*24;
-const WEEK_MS = DAY_MS*7;
-const MONTHR_MS = DAY_MS*30;
-function MONTH_MS(m=3, l=false) { 
-  let ms = monthDayCnt[m % 12] * DAY_MS;
-  if (l && m > 0) ms += DAY_MS;
-  return ms
-}
-const YEAR_MS = DAY_MS*365;
-const TIMEUNITSVALUESSHORT = {
-  y: YEAR_MS, 
-  M: MONTHR_MS,
-  w: WEEK_MS,
-  d: DAY_MS,
-  h: HOUR_MS,
-  m: MINUTE_MS,
-  s: SECOND_MS,
-};
-const TIMEUNITSVALUESLONG = {
-  years: YEAR_MS,
-  months: MONTHR_MS,
-  weeks: WEEK_MS,
-  days: DAY_MS,
-  hours: HOUR_MS,
-  minutes: MINUTE_MS,
-  seconds: SECOND_MS,
-};
-const TIMEUNITSVALUES = { ...TIMEUNITSVALUESSHORT, ...TIMEUNITSVALUESLONG };
-
-function buildSubGrads() {
-  const grads = {};
-  for (let unit in TIMEUNITSVALUESSHORT) {
-    let i = 0;
-    grads[unit] = [];
-    do {
-      grads[unit].push(Math.round(TIMEUNITSVALUESSHORT[unit] * i));
-      i += 0.125;
-    }
-    while(i < 1)
-  }
-  return grads
-}
-
-
-function isValidTimestamp( _timestamp ) {
-  const newTimestamp = new Date(_timestamp).getTime();
-  return isNumber(newTimestamp);
-}
-
-function isValidTimeInRange( time, start=BTCGENESIS,end=Date.now() ) {
-  if (!isValidTimestamp(time)) return false
-  return (time > start && time < end) ? true : false
-}
-
-const timestampDiff = {
-
-  inSeconds: function(d1, d2) {
-        d1 = new Date(d1);
-        d2 = new Date(d2);
-    var t2 = d2.getTime();
-    var t1 = d1.getTime();
-
-    return parseInt((t2-t1)/SECOND_MS);
-  },
-  inMinutes: function(d1, d2) {
-        d1 = new Date(d1);
-        d2 = new Date(d2);
-    let t2 = d2.getTime();
-    let t1 = d1.getTime();
-
-    return parseInt((t2-t1)/MINUTE_MS);
-  },
-
-  inHours: function(d1, d2) {
-        d1 = new Date(d1);
-        d2 = new Date(d2);
-    let t2 = d2.getTime();
-    let t1 = d1.getTime();
-
-    return parseInt((t2-t1)/HOUR_MS);
-  },
-
-  inDays: function(d1, d2) {
-        d1 = new Date(d1);
-        d2 = new Date(d2);
-    let t2 = d2.getTime();
-    let t1 = d1.getTime();
-
-    return parseInt((t2-t1)/DAY_MS);
-  },
-
-  inWeeks: function(d1, d2) {
-        d1 = new Date(d1);
-        d2 = new Date(d2);
-    let t2 = d2.getTime();
-    let t1 = d1.getTime();
-
-    return parseInt((t2-t1)/WEEK_MS);
-  },
-
-  inMonths: function(d1, d2) {
-         d1 = new Date(d1);
-         d2 = new Date(d2);
-    let d1Y = d1.getUTCFullYear();
-    let d2Y = d2.getUTCFullYear();
-    let d1M = d1.getUTCMonth();
-    let d2M = d2.getUTCMonth();
-
-    return (d2M+12*d2Y)-(d1M+12*d1Y);
-  },
-
-  inYears: function(d1, d2) {
-    let d1Y = new Date(d1);
-    let d2Y = new Date(d2);
-    return d2Y.getUTCFullYear()-d1Y.getUTCFullYear();
-  }
-  
-};
-
-/**
- * Timestamp difference in multiple units
- *
- * @param {timestamp} date1 - milliseconds
- * @param {timestamp} date2 - milliseconds
- * @return {object}  
- */
-function timestampDifference(date1,date2) {
-  let years = timestampDiff.inYears(date1,date2);
-  let months = timestampDiff.inMonths(date1,date2);
-  let weeks = timestampDiff.inWeeks(date1,date2);
-  let days = timestampDiff.inDays(date1,date2);
-  let hours = timestampDiff.inHours(date1,date2);
-  let minutes = timestampDiff.inMinutes(date1,date2);
-  let seconds = timestampDiff.inSeconds(date1,date2);
-  let milliseconds = new Date(date2).getTime() - new Date(date1).getTime();
-
-  return {
-    y: years,
-    M: months,
-    w:weeks,
-    d:days,
-    h:hours,
-    m:minutes,
-    s:seconds,
-    ms:milliseconds,
-    
-    years: years,
-    months: months,
-    weeks:weeks,
-    days:days,
-    hours:hours,
-    minutes:minutes,
-    seconds:seconds,
-    milliseconds:milliseconds
-  }
-}
-
-
-/**
- * Milliseconds broken down into major unit and remainders
- *
- * @export
- * @param {number} milliseconds
- * @return {object}  
- */
-function ms2TimeUnits( milliseconds ) {
-  // let years, months, _weeks, weeks, days, hours, minutes, seconds;
-  let seconds = Math.floor(milliseconds / 1000);
-  let minutes = Math.floor(seconds / 60);
-      seconds = seconds % 60;
-  let hours = Math.floor(minutes / 60);
-      minutes = minutes % 60;
-  let days = Math.floor(hours / 24);
-      hours = hours % 24;
-  let _weeks = Math.floor(days / 7);
-      days = days % 7;
-  let months = Math.floor(_weeks / 4);
-  let years = Math.floor(_weeks / 52);
-  let weeks = _weeks % 4;
-  // accumulative extra days of months (28 days) 
-  // in 1 year (365 days) = 29 days
-  // thus...
-  months = months % 13;
-
-  return {
-    y: years,
-    M: months,
-    w: weeks,
-    d: days,
-    h: hours,
-    m: minutes,
-    s: seconds,
-    
-    years: years,
-    months: months,
-    weeks: weeks,
-    days: days,
-    hours: hours,
-    minutes: minutes,
-    seconds: seconds,
-  };
-}
-
-function ms2Interval( milliseconds ) {
-  const intervals = ms2TimeUnits(milliseconds);
-  for (const unit in intervals) {
-    if (intervals[unit]) return `${intervals[unit]}${unit}`
-  }
-}
-
-function get_minute(t) {
-  return t ? new Date(t).getUTCMinutes() : null
-}
-
-function minute_start(t) {
-  let start = new Date(t);
-  return start.setUTCSeconds(0,0)
-}
-
-function get_hour(t) {
-  return t ? new Date(t).getUTCHours() : null
-}
-
-function hour_start(t) {
-  let start = new Date(t);
-  return start.setUTCMinutes(0,0,0)
-}
-
-/**
- * day number of the month
- *
- * @param {timestamp} t - timestamp ms
- * @return {number} - day number of the month
- */
- function get_day(t) {
-  return t ? new Date(t).getUTCDate() : null
-}
-
-function get_dayName(t, locale="en-GB", len="short") {
-  return new Date(t).toLocaleDateString(locale, {weekday: len})
-}
-
-/**
- * Start of the day (zero millisecond)
- *
- * @param {timestamp} t - timestamp ms
- * @return {timestamp} - timestamp ms
- */
- function day_start(t) {
-  return new Date(t).setUTCHours(0,0,0,0)
-}
-
-/**
- * month number of the year
- *
- * @param {timestamp} t - timestamp ms
- * @return {number} - month number of the year
- */
- function get_month(t) {
-  if (!t) return undefined
-  return new Date(t).getUTCMonth()
-}
-
-function get_monthName(t, locale="en-GB", len="short") {
-  return new Date(t).toLocaleDateString(locale, {month: len})
-}
-
-/**
- * Start of the month (zero millisecond)
- *
- * @param {timestamp} t - timestamp ms
- * @return {timestamp} - timestamp ms
- */
- function month_start(t) {
-  let date = new Date(t);
-  return Date.UTC(
-      date.getUTCFullYear(),
-      date.getUTCMonth(), 1
-  )
-}
-
-function nextMonth(t) {
-  let m = (get_month(t) + 1) % 12;
-  t += MONTH_MS(m, isLeapYear(t));
-  return t
-}
-
-/**
- * the year
- *
- * @param {timestamp} t - timestamp ms
- * @return {number} - the year
- */
- function get_year(t) {
-  if (!t) return undefined
-  return new Date(t).getUTCFullYear()
-}
-
-/**
- * Start of the year (zero millisecond)
- *
- * @param {timestamp} t - timestamp ms
- * @return {timestamp} - timestamp ms
- */
- function year_start(t) {
-  return Date.UTC(new Date(t).getUTCFullYear())
-}
-
-function nextYear(t) {
-  t = t + YEAR_MS + DAY_MS;
-  if (!isLeapYear(t)) ;
-  return t
-}
-
-function isLeapYear(t) {
-  let date = new Date(t);
-  let year = date.getUTCFullYear();
-  if((year & 3) != 0) return false;
-  return ((year % 100) != 0 || (year % 400) == 0);
-}
-
-function dayOfYear(t) {
-  let date = new Date(t);
-  let mn = date.getUTCMonth();
-  let dn = date.getUTCDate();
-  let dayOfYear = dayCount[mn] + dn;
-  if(mn > 1 && isLeapYear()) dayOfYear++;
-  return dayOfYear;
-}
-
-var Time = /*#__PURE__*/Object.freeze(/*#__PURE__*/Object.defineProperty({
-  __proto__: null,
-  TIMEUNITS: TIMEUNITS,
-  TIMEUNITSLONG: TIMEUNITSLONG,
-  dayCntInc: dayCntInc,
-  dayCntLeapInc: dayCntLeapInc,
-  monthDayCnt: monthDayCnt,
-  BTCGENESIS: BTCGENESIS,
-  SECOND_MS: SECOND_MS,
-  MINUTE_MS: MINUTE_MS,
-  HOUR_MS: HOUR_MS,
-  DAY_MS: DAY_MS,
-  WEEK_MS: WEEK_MS,
-  MONTHR_MS: MONTHR_MS,
-  MONTH_MS: MONTH_MS,
-  YEAR_MS: YEAR_MS,
-  TIMEUNITSVALUESSHORT: TIMEUNITSVALUESSHORT,
-  TIMEUNITSVALUESLONG: TIMEUNITSVALUESLONG,
-  TIMEUNITSVALUES: TIMEUNITSVALUES,
-  buildSubGrads: buildSubGrads,
-  isValidTimestamp: isValidTimestamp,
-  isValidTimeInRange: isValidTimeInRange,
-  timestampDiff: timestampDiff,
-  timestampDifference: timestampDifference,
-  ms2TimeUnits: ms2TimeUnits,
-  ms2Interval: ms2Interval,
-  get_minute: get_minute,
-  minute_start: minute_start,
-  get_hour: get_hour,
-  hour_start: hour_start,
-  get_day: get_day,
-  get_dayName: get_dayName,
-  day_start: day_start,
-  get_month: get_month,
-  get_monthName: get_monthName,
-  month_start: month_start,
-  nextMonth: nextMonth,
-  get_year: get_year,
-  year_start: year_start,
-  nextYear: nextYear,
-  isLeapYear: isLeapYear,
-  dayOfYear: dayOfYear
-}, Symbol.toStringTag, { value: 'Module' }));
-
-// xAxis.js
-
-class xAxis extends Axis {
-
-  #core
-  #parent
-  #chart
-
-  #xAxisTicks = 4
-  #xAxisGrads
-  #xAxisSubGrads
-  #xAxisOffset
-
-  constructor(parent, chart) {
-    super();
-    this.#chart = chart;
-    this.#parent = parent;
-    this.#core = this.#parent.mediator.api.core;
-    this.#xAxisSubGrads = buildSubGrads();
-  }
-
-  get chart() { return this.#parent.mediator.api.Chart }
-  get data() { return this.chart.data }
-  get range() { return this.#parent.range }
-  get width() { return this.calcWidth() }
-  get interval() { return this.range.interval }
-  get intervalStr() { return this.range.intervalStr }
-  get timeStart() { return this.range.timeStart }
-  get timeFinish() { return this.range.timeFinish }
-  get rangeDuration() { return this.range.rangeDuration }
-  get indexStart() { return this.range.indexStart }
-  get indexEnd() { return this.range.indexEnd }
-  get timeMax() { return this.range.timeMax }
-  get timeMin() { return this.range.timeMin }
-  get candleW() { return round(this.width / this.range.Length, 1) }
-  get gradsMax() { return Math.trunc(this.width / MAXGRADSPER) }
-      gradsYear(t) { return get_year(t) }
-      gradsMonthName(t) { return get_monthName(t) }
-      gradsDayName(t) { return get_dayName(t) +" "+ get_day(t) }
-      gradsHour(t) { return get_hour(t) + ":00" }
-      gradsMinute(t) { return "00:" + get_minute(t) }
-  get xAxisRatio() { return this.width / this.range.rangeDuration }
-  set xAxisTicks(t) { this.#xAxisTicks = isNumber(t) ? t : 0; }
-  get xAxisTicks() { return this.#xAxisTicks }
-  get xAxisGrads() { return this.#xAxisGrads }
-  get xAxisSubGrads() { return this.#xAxisSubGrads }
-  get scrollOffsetPx() { return this.#core.scrollPos % this.candleW }
-  get bufferPx() { return this.#core.bufferPx }
-
-  calcWidth() {
-    return this.#core.Chart.width - this.#core.Chart.scale.width
-  }
-
-
-
-  /**
- * return canvas x co-ordinate
- * handles X Axis modes: default, indexed
- * @param {number} dataX - chart time
- * @return {number}  
- * @memberof xAxis
- */
-  xPos(time) {
-    let width = time - this.range.timeMin;
-    let xPos = (width * this.xAxisRatio) + (this.candleW * 0.5);
-    return xPos
-  }
-
-  t2Pixel(t) {
-    let width = t - this.range.timeMin;
-    let xPos = (width * this.xAxisRatio) + (this.candleW * 0.5);
-    return xPos
-  }
-
-  pixel2T(x) {
-    let c = this.pixel2Index(x);
-    return this.range.value(c)[0]
-  }
-
-  pixel2Index(x) {
-    return Math.floor(x / this.candleW ) + this.range.indexStart
-  }
-
-  pixelOHLCV(x) {
-    let c = Math.floor(x / this.candleW ) + this.range.indexStart;
-    return this.range.value(c)
-  }
-
-  xPosSnap2CandlePos(x) {
-    let c = Math.round((x / this.candleW));
-    return  (c * this.candleW) + (this.candleW / 2)
-  }
-
-  /**
-   * return chart time
-   * handles X Axis modes: default, indexed
-   * @param {number} x
-   * @returns {timestamp}
-   * @memberof xAxis
-   */
-  xPos2Time(x) {
-    return this.pixel2T(x)
-  }
-
-  xPos2Index(x) {
-    return this.pixel2Index(x)
-  }
-
-  xPosOHLCV(x) {
-    return this.pixelOHLCV(x)
-  }
-
-  initXAxisGrads() {
-    this.#xAxisGrads = this.calcXAxisGrads();
-  }
-
-  calcXAxisGrads() {
-    const rangeStart = this.timeMin;
-    const rangeEnd = this.timeMax;
-    const intervalStr = this.intervalStr;
-    const grads = {values: []};
-    intervalStr.charAt(intervalStr.length - 1);
-    
-      let days, inc, month, next, t, t1, t2, units, 
-          major, majorValue, minorValue, minorTick, majorTick;
-    
-      units = ms2TimeUnits(this.rangeDuration);
-      grads.units = ms2TimeUnits(this.rangeDuration);
-    
-    // Years
-    if (units.years > 0) {
-      grads.unit = ["y", "year"];
-      grads.timeSpan = `${units.years} years`;
-      
-      t1 = year_start(rangeStart);
-      t2 = nextYear(year_start(rangeEnd)) + YEAR_MS;
-        
-      units = timestampDifference(t1, t2);
-      major = units.years;
-      majorTick = Math.ceil(1 / (this.gradsMax / major));
-      minorTick = (units.years >= this.gradsMax - 1) ? 0 : Math.floor(this.gradsMax / major);
-      
-      majorValue = (t) => { 
-        return get_year(t) 
-      };
-      minorValue = (t) => { 
-        if (get_month(t) == 0) return get_year(t)
-        else return get_monthName(t) 
-      };
-      
-      t = t1;
-      inc = Math.round((YEAR_MS + DAY_MS) / (minorTick + 1));
-      grads.major = [];
-      grads.minor = [];
-
-      while (t < t2) {
-        t = year_start(t);
-        grads.major.push(t);
-        next = t;
-        for (let i = majorTick; i > -1; --i) {
-          next = nextYear(next);
-        }
-
-        if (minorTick > 0 && this.interval < YEAR_MS) {
-          while (t < next) {
-            t = month_start(t + inc);
-            grads.minor.push(t);
-          }
-        }
-        t = next;
-      }
-    }
-      
-    // Months
-    else if (units.months > 0) {
-      let months = units.months;
-      grads.unit = ["M", "month"];
-      grads.timeSpan = `${units.months} months`;
-      
-      t1 = month_start(rangeStart);
-      t2 = month_start(rangeEnd) + MONTH_MS(get_month(rangeEnd)) + YEAR_MS;
-        
-      units = timestampDifference(t1, t2);
-      major = months;
-      majorTick = Math.ceil(1 / (this.gradsMax / major));
-      minorTick = (months >= this.gradsMax - 1) ? 0 : Math.floor(this.gradsMax / major);
-
-      grads.majorTick = majorTick;
-      grads.minorTick = minorTick;
-      
-      majorValue = (t) => { 
-        if (get_month(t) == 0) return get_year(t)
-        else return get_monthName(t)
-      };
-      minorValue = (t) => { 
-        if (get_day(t) == 1) return get_monthName(t) 
-        else return this.gradsDayName(t) 
-      };
-      
-      t = t1;
-      inc = Math.round((DAY_MS * 28) / (minorTick + 1));
-      grads.inc = inc;
-      grads.major = [];
-      grads.minor = [];
-
-      while (t < t2) {
-        t = month_start(t);
-        grads.major.push(t);
-        next = t;
-        for (let i = majorTick; i > 0; i--) {
-          next = month_start(next + (DAY_MS * 31));
-        }
-
-        if (minorTick > 0 && this.interval < DAY_MS * 28) {
-          month = month_start(t + (DAY_MS * 31));
-          while (t < month) {
-            t = day_start(t + inc);
-            if (t >= month) break
-            else if (month - t < inc * 0.75) break
-            else grads.minor.push(t);
-          }
-        }
-        t = next;
-      }
-    }
-    
-    // Days
-    else if (units.weeks > 0 || units.days > 0) {
-      days = units.weeks * 7 + units.days;
-
-      grads.unit = ["d", "day"];
-      grads.timeSpan = `${days} days`;
-      
-      t1 = day_start(rangeStart);
-      t2 = day_start(rangeEnd) + MONTHR_MS;
-        
-      units = timestampDifference(t1, t2);
-      major = days;
-      majorTick = Math.ceil(1 / (this.gradsMax / major));
-      minorTick = (days >= this.gradsMax - 1) ? 0 : Math.floor(this.gradsMax / major);
-      
-      majorValue = (t) => { 
-        if (get_month(t) == 0 && get_day(t) == 1) return get_year(t)
-        else if (get_day(t) == 1) return get_monthName(t)
-        else return this.gradsDayName(t) // null
-        // else if (unit == "h") return get_hour(t) + ":00" 
-      };
-      minorValue = (t) => { 
-        if (get_day(t) == 1) return get_monthName(t)
-        else if (get_hour(t) == 0) return this.gradsDayName(t) // null
-        else return get_hour(t) + ":00" 
-      };
-      
-      t = t1;
-      inc = Math.round(DAY_MS / (minorTick + 1));
-      grads.major = [];
-      grads.minor = [];
-
-      while (t < t2) {
-        t = day_start(t);
-        grads.major.push(t);
-        next = t;
-        for (let i = majorTick; i > 0; i--) {
-          next = next + DAY_MS;
-        }
-
-        if (minorTick > 0 && this.interval < DAY_MS) {
-          while (t < next) {
-            t = hour_start(t + inc);
-            grads.minor.push(t);
-          }
-        }
-        t = next;
-      }
-    }
-    
-    // Hours
-    else if (units.hours > 0) {
-      grads.unit = ["h", "hour"];
-      grads.timeSpan = `${units.hours} hours`;
-      
-      t1 = day_start(rangeStart);
-      t2 = day_start(rangeEnd) + DAY_MS;
-        
-      units = timestampDifference(t1, t2);
-      major = units.hours;
-      majorTick = Math.ceil(1 / (this.gradsMax / major));
-      minorTick = (units.hours >= this.gradsMax - 1) ? 0 : Math.floor(this.gradsMax / major);
-      
-      majorValue = (t) => { 
-        if (get_hour(t) == 0) return this.gradsDayName(t)
-        else if (get_minute(t) == 0) return get_hour(t) + ":00"
-        else return "00:" + get_minute(t)
-      };
-      minorValue = (t) => { 
-          if (get_minute(t) == 0) return get_hour(t) + ":00"
-          else return "00:" + get_minute(t) 
-      };
-      
-      t = t1;
-      inc = Math.round(HOUR_MS / (minorTick + 1));
-      grads.major = [];
-      grads.minor = [];
-
-      while (t < t2) {
-        t = hour_start(t);
-        grads.major.push(t);
-        next = t;
-        for (let i = majorTick; i > -1; --i) {
-          next = next + HOUR_MS;
-        }
-
-        if (minorTick > 0 && this.interval < HOUR_MS) {
-          while (t < next) {
-            t = minute_start(t + inc);
-            grads.minor.push(t);
-          }
-        }
-        t = next;
-      }
-    }
-    
-    // Minutes
-    else if (units.minutes > 0) {
-      grads.unit = ["m", "minute"];
-      grads.timeSpan = `${units.minutes} minutes`;
-      
-      t1 = day_start(rangeStart);
-      t2 = day_start(rangeEnd) + HOUR_MS;
-        
-      units = timestampDifference(t1, t2);
-      major = units.minutes;
-      majorTick = Math.ceil(this.gradsMax / major);
-      minorTick = (units.minutes >= this.gradsMax - 1) ? 0 : Math.floor(this.gradsMax / major);
-      
-      majorValue = (t) => { 
-        if (get_minute(t) == 0) return get_hour(t) + ":00"
-        else return "00:" + get_minute(t) 
-      };
-      
-      t = t1;
-  //       inc = Math.round(HOUR_MS / (minorTick + 1))
-      grads.major = [];
-      grads.minor = [];
-
-      while (t < t2) {
-        grads.major.push(t);
-        next = t;
-        for (let i = majorTick; i > -1; --i) {
-          next = next + MINUTE_MS;
-        }
-
-  //         if (minorTick > 0) {
-  //           while (t < next) {
-  //             t = second_start(t + inc)
-  //             grads.minor.push(t)
-  //           }
-          t = next;
-        }
-      }
-  //       grads.values = [...grads.major, ...grads.minor]  
-
-    let i = -1;
-    while (++i < grads.major.length) {
-      t = grads.major[i];
-      grads.values.push([majorValue(t), this.t2Pixel(t), t, "major"]);
-    }
-    i = -1;
-    while (++i < grads.minor.length) {
-      t = grads.minor[i];
-      grads.values.push([minorValue(t), this.t2Pixel(t), t, "minor"]);
-    }
-
-    return grads
-  }
-
-  idealTicks(t1, t2, unit) {
-    let t = t1;
-    let ticks = [];
-    do {
-      let i = -1;
-      while (++i < this.#xAxisSubGrads[unit].length) {
-        t += this.#xAxisSubGrads[unit][i];
-        ticks.push(t);
-      }
-    }
-    while (t < t2)
-    return ticks
-  }
-
-  draw() {
-    this.#xAxisGrads = this.calcXAxisGrads();
-    this.drawGrads();
-    this.drawOverlays();
-  }
-
-  drawGrads() {
-    this.#parent.layerLabels.scene.clear();
-
-    const grads = this.#xAxisGrads.values;
-    const ctx = this.#parent.layerLabels.scene.context;
-    this.width / this.range.Length * 0.5;
-    const offset = 0;
-
-
-    ctx.save();
-    ctx.strokeStyle = XAxisStyle.COLOUR_TICK;
-    ctx.fillStyle = XAxisStyle.COLOUR_TICK;
-    ctx.font = XAxisStyle.FONT_LABEL;
-    for (let tick of grads) { 
-      let w = Math.floor(ctx.measureText(`${tick[0]}`).width * 0.5);
-      ctx.fillText(tick[0], tick[1] - w + offset, this.xAxisTicks + 12);
-
-      ctx.beginPath();
-      ctx.moveTo(tick[1] + offset, 0);
-      ctx.lineTo(tick[1] + offset, this.xAxisTicks);
-      ctx.stroke();
-    }
-      ctx.restore();
-  }
-
-  drawOverlays() {
-    this.#parent.layerOverlays.scene.clear();
-
-    this.#xAxisGrads;
-
-  }
-
-}
-
-// canvas.js
-
-/**
- * Viewport constructor
- * @param {Object} cfg - {width, height}
- */
-class Viewport {
-  constructor(cfg) {
-    if (!cfg) cfg = {};
-
-    this.container = cfg.container;
-    this.layers = [];
-    this.id = CEL.idCnt++;
-    this.scene = new CEL.Scene();
-
-    this.setSize(cfg.width || 0, cfg.height || 0);
-
-    // clear container
-    cfg.container.innerHTML = "";
-    cfg.container.appendChild(this.scene.canvas);
-
-    CEL.viewports.push(this);
-  }
-
-  /**
-   * set viewport size
-   * @param {Integer} width - viewport width in pixels
-   * @param {Integer} height - viewport height in pixels
-   * @returns {Viewport}
-   */
-  setSize(width, height) {
-    this.width = width;
-    this.height = height;
-    this.scene.setSize(width, height);
-
-    this.layers.forEach(function (layer) {
-      layer.setSize(width, height);
-    });
-
-    return this;
-  }
-  /**
-   * add layer
-   * @param {CEL.Layer} layer
-   * @returns {Viewport}
-   */
-  addLayer(layer) {
-    this.layers.push(layer);
-    layer.setSize(layer.width || this.width, layer.height || this.height);
-    layer.viewport = this;
-    return this;
-  }
-  /**
-   * get key's associated coordinate - applied to mouse events.
-   * @param {Number} x
-   * @param {Number} y
-   * @returns {Integer} integer - returns -1 if no pixel is there
-   */
-  getIntersection(x, y) {
-    var layers = this.layers,
-      len = layers.length,
-      n = len - 1,
-      layer,
-      key;
-
-    while (n >= 0) {
-      layer = layers[n];
-      key = layer.hit.getIntersection(x, y);
-      if (key >= 0) {
-        return key;
-      }
-      n--;
-    }
-
-    return -1;
-  }
-  /**
-   * get viewport index from all CEL viewports
-   * @returns {Integer}
-   */
-  getIndex() {
-    let viewports = CEL.viewports,
-      viewport,
-      n = 0;
-
-    for (viewport of viewports) {
-      if (this.id === viewport.id) return n;
-      n++;
-    }
-
-    return null;
-  }
-  /**
-   * destroy viewport
-   */
-  destroy() {
-    // remove layers
-    for (let layer of layers) {
-      layer.remove();
-    }
-
-    // clear dom
-    this.container.innerHTML = "";
-
-    // remove self from #viewports array
-    CEL.viewports.splice(this.getIndex(), 1);
-  }
-  /**
-   * composite all layers onto canvas
-   */
-  render() {
-    let scene = this.scene,
-      layers = this.layers,
-      layer;
-
-    scene.clear();
-
-    for (layer of layers) {
-      if (layer.visible)
-        scene.context.drawImage(
-          layer.scene.canvas,
-          layer.x,
-          layer.y,
-          layer.width,
-          layer.height
-        );
-    }
-  }
-}
-
-class Layer {
-  /**
-   * Layer constructor
-   * @param {Object} cfg - {x, y, width, height}
-   */
-  constructor(cfg) {
-    if (!cfg) cfg = {};
-
-    this.id = CEL.idCnt++;
-    this.x = 0;
-    this.y = 0;
-    this.width = 0;
-    this.height = 0;
-    this.visible = true;
-    this.hit = new CEL.Hit({
-      contextType: cfg.contextType,
-    });
-    this.scene = new CEL.Scene({
-      contextType: cfg.contextType,
-    });
-
-    if (cfg.x && cfg.y) {
-      this.setPosition(cfg.x, cfg.y);
-    }
-    if (cfg.width && cfg.height) {
-      this.setSize(cfg.width, cfg.height);
-    }
-  }
-
-  /**
-   * set layer position
-   * @param {Number} x
-   * @param {Number} y
-   * @returns {Layer}
-   */
-  setPosition(x, y) {
-    this.x = x;
-    this.y = y;
-    return this;
-  }
-  /**
-   * set layer size
-   * @param {Number} width
-   * @param {Number} height
-   * @returns {Layer}
-   */
-  setSize(width, height) {
-    this.width = width;
-    this.height = height;
-    this.scene.setSize(width, height);
-    this.hit.setSize(width, height);
-    return this;
-  }
-  /**
-   * move up
-   * @returns {Layer}
-   */
-  moveUp() {
-    let index = this.getIndex(),
-      viewport = this.viewport,
-      layers = viewport.layers;
-
-    if (index < layers.length - 1) {
-      // swap
-      layers[index] = layers[index + 1];
-      layers[index + 1] = this;
-    }
-
-    return this;
-  }
-  /**
-   * move down
-   * @returns {Layer}
-   */
-  moveDown() {
-    let index = this.getIndex(),
-      viewport = this.viewport,
-      layers = viewport.layers;
-
-    if (index > 0) {
-      // swap
-      layers[index] = layers[index - 1];
-      layers[index - 1] = this;
-    }
-
-    return this;
-  }
-  /**
-   * move to top
-   * @returns {Layer}
-   */
-  moveTop() {
-    let index = this.getIndex(),
-      viewport = this.viewport,
-      layers = viewport.layers;
-
-    layers.splice(index, 1);
-    layers.push(this);
-  }
-  /**
-   * move to bottom
-   * @returns {Layer}
-   */
-  moveBottom() {
-    let index = this.getIndex(),
-      viewport = this.viewport,
-      layers = viewport.layers;
-
-    layers.splice(index, 1);
-    layers.unshift(this);
-
-    return this;
-  }
-  /**
-   * get layer index from viewport layers
-   * @returns {Number|null}
-   */
-  getIndex() {
-    let layers = this.viewport.layers;
-      layers.length;
-      let n = 0,
-      layer;
-
-    for (layer of layers) {
-      if (this.id === layer.id) return n;
-      n++;
-    }
-
-    return null;
-  }
-  /**
-   * remove
-   */
-  remove() {
-    // remove this layer from layers array
-    this.viewport.layers.splice(this.getIndex(), 1);
-  }
-}
-
-class Scene {
-  /**
-   * Scene constructor
-   * @param {Object} cfg - {width, height}
-   */
-  constructor(cfg) {
-    if (!cfg) cfg = {};
-
-    this.id = CEL.idCnt++;
-
-    this.width = 0;
-    this.height = 0;
-    this.contextType = cfg.contextType || "2d";
-
-    this.canvas = document.createElement("canvas");
-    this.canvas.className = "scene-canvas";
-    this.canvas.style.display = "block";
-    this.context = this.canvas.getContext(this.contextType);
-
-    if (cfg.width && cfg.height) {
-      this.setSize(cfg.width, cfg.height);
-    }
-  }
-
-  /**
-   * set scene size
-   * @param {Number} width
-   * @param {Number} height
-   * @returns {Scene}
-   */
-  setSize(width, height) {
-    this.width = width;
-    this.height = height;
-    this.canvas.width = width * CEL.pixelRatio;
-    this.canvas.style.width = `${width}px`;
-    this.canvas.height = height * CEL.pixelRatio;
-    this.canvas.style.height = `${height}px`;
-
-    if (this.contextType === "2d" && CEL.pixelRatio !== 1) {
-      this.context.scale(CEL.pixelRatio, CEL.pixelRatio);
-    }
-
-    return this;
-  }
-  /**
-   * clear scene
-   * @returns {Scene}
-   */
-  clear() {
-    let context = this.context;
-    if (this.contextType === "2d") {
-      context.clearRect(
-        0,
-        0,
-        this.width * CEL.pixelRatio,
-        this.height * CEL.pixelRatio
-      );
-    }
-    // webgl or webgl2
-    else {
-      context.clear(context.COLOR_BUFFER_BIT | context.DEPTH_BUFFER_BIT);
-    }
-    return this;
-  }
-  /**
-   * convert scene into an image
-   * @param {String} type - type of image format
-   * @param {Number} quality - image quality 0 - 1
-   * @param {Function} cb - callback
-   */
-  toImage(type = "image/png", quality, cb) {
-    let that = this,
-      imageObj = new Image(),
-      dataURL = this.canvas.toDataURL(type, quality);
-
-    imageObj.onload = function () {
-      imageObj.width = that.width;
-      imageObj.height = that.height;
-      cb(imageObj);
-    };
-    imageObj.src = dataURL;
-  }
-  /**
-   * export scene as an image
-   * @param {Object} cfg - {filename}
-   * @param {Function} cb - optional, by default opens image in new window / tab
-   * @param {String} type - type of image format
-   * @param {Number} quality - image quality 0 - 1
-   */
-  export(cfg, cb, type = "image/png", quality) {
-    if (typeof cb !== "function") cb = this.blobCallback.bind({ cfg: cfg });
-    this.canvas.toBlob(cb, type, quality);
-  }
-
-  blobCallback(blob) {
-    let anchor = document.createElement("a"),
-      dataUrl = URL.createObjectURL(blob),
-      fileName = this.cfg.fileName || "canvas.png";
-
-    // set <a></a> attributes
-    anchor.setAttribute("href", dataUrl);
-    anchor.setAttribute("target", "_blank");
-    anchor.setAttribute("export", fileName);
-
-    // invoke click
-    if (document.createEvent) {
-      Object.assign(document.createElement("a"), {
-        href: dataUrl,
-        target: "_blank",
-        export: fileName,
-      }).click();
-    } else if (anchor.click) {
-      anchor.click();
-    }
-  }
-}
-
-class Hit {
-  /**
-   * Hit constructor
-   * @param {Object} cfg - {width, height}
-   */
-  constructor(cfg) {
-    if (!cfg) cfg = {};
-
-    this.width = 0;
-    this.height = 0;
-    this.contextType = cfg.contextType || "2d";
-    this.canvas = document.createElement("canvas");
-    this.canvas.className = "hit-canvas";
-    this.canvas.style.display = "none";
-    this.canvas.style.position = "relative";
-    this.context = this.canvas.getContext(this.contextType, {
-      // add preserveDrawingBuffer to pick colors with readPixels for hit detection
-      preserveDrawingBuffer: true,
-      // fix webgl antialiasing picking issue
-      antialias: false,
-    });
-
-    if (cfg.width && cfg.height) {
-      this.setSize(cfg.width, cfg.height);
-    }
-  }
-
-  /**
-   * set hit size
-   * @param {Number} width
-   * @param {Number} height
-   * @returns {Hit}
-   */
-  setSize(width, height) {
-    this.width = width;
-    this.height = height;
-    this.canvas.width = width * CEL.pixelRatio;
-    this.canvas.style.width = `${width}px`;
-    this.canvas.height = height * CEL.pixelRatio;
-    this.canvas.style.height = `${height}px`;
-    return this;
-  }
-  /**
-   * clear hit
-   * @returns {Hit}
-   */
-  clear() {
-    let context = this.context;
-    if (this.contextType === "2d") {
-      context.clearRect(
-        0,
-        0,
-        this.width * CEL.pixelRatio,
-        this.height * CEL.pixelRatio
-      );
-    }
-    // webgl or webgl2
-    else {
-      context.clear(context.COLOR_BUFFER_BIT | context.DEPTH_BUFFER_BIT);
-    }
-    return this;
-  }
-  /**
-   * get key associated with coordinate. This can be used for mouse interactivity.
-   * @param {Number} x
-   * @param {Number} y
-   * @returns {Integer} integer - returns -1 if no pixel is there
-   */
-  getIntersection(x, y) {
-    let context = this.context,
-      data;
-
-    x = Math.round(x);
-    y = Math.round(y);
-
-    // if x or y are out of bounds return -1
-    if (x < 0 || y < 0 || x > this.width || y > this.height) {
-      return -1;
-    }
-
-    // 2d
-    if (this.contextType === "2d") {
-      data = context.getImageData(x, y, 1, 1).data;
-
-      if (data[3] < 255) {
-        return -1;
-      }
-    }
-    // webgl
-    else {
-      data = new Uint8Array(4);
-      context.readPixels(
-        x * CEL.pixelRatio,
-        (this.height - y - 1) * CEL.pixelRatio,
-        1,
-        1,
-        context.RGBA,
-        context.UNSIGNED_BYTE,
-        data
-      );
-
-      if (data[0] === 255 && data[1] === 255 && data[2] === 255) {
-        return -1;
-      }
-    }
-
-    return this.rgbToInt(data);
-  }
-  /**
-   * get canvas formatted color string from data index
-   * @param {Number} index
-   * @returns {String}
-   */
-  getColorFromIndex(index) {
-    let rgb = this.intToRGB(index);
-    return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
-  }
-  /**
-   * converts rgb array to integer value
-   * @param {Array.<Number} rgb - [r,g,b]
-   * @returns {Integer}
-   */
-  rgbToInt(rgb) {
-    let r = rgb[0];
-    let g = rgb[1];
-    let b = rgb[2];
-    return (r << 16) + (g << 8) + b;
-  }
-  /**
-   * converts integer value to rgb array
-   * @param {Number} number - positive number between 0 and 256*256*256 = 16,777,216
-   * @returns {Array.<Integer>}
-   */
-  intToRGB(number) {
-    let r = (number & 0xff0000) >> 16;
-    let g = (number & 0x00ff00) >> 8;
-    let b = number & 0x0000ff;
-    return [r, g, b];
-  }
-}
-
-// Canvas Extension Layers
-const CEL = {
-  idCnt: 0,
-  viewports: [],
-  pixelRatio: (window && window.devicePixelRatio) || 1,
-
-  Viewport: Viewport,
-  Layer: Layer,
-  Scene: Scene,
-  Hit: Hit,
-};
-
-const defaultOptions$1 = {
-  fontSize: 12,
-  fontWeight: "normal",
-  fontFamily: 'Helvetica Neue',
-  paddingLeft: 3,
-  paddingRight: 3,
-  paddingTop: 2,
-  paddingBottom: 2,
-  borderSize: 0,
-  txtCol: "#000",
-  bakCol: "#CCC"
-};
-
-/**
- * Measure the width of the text
- * @param ctx
- * @param text
- * @returns {number}
- */
-function calcTextWidth (ctx, text) {
-  return Math.round(ctx.measureText(text).width)
-}
-
-/**
- * Create font
- * @param fontSize
- * @param fontFamily
- * @param fontWeight
- * @returns {string}
- */
-function createFont (
-  fontSize = defaultOptions$1.fontSize, 
-  fontWeight = defaultOptions$1.fontWeight, 
-  fontFamily = defaultOptions$1.fontFamily
-  ) {
-  return `${fontWeight} ${fontSize}px ${fontFamily}`
-}
-
-/**
- * Get the width of the text box
- * @param ctx
- * @param text
- * @param options
- * @returns {number}
- */
-function getTextRectWidth (ctx, text, options) {
-  ctx.font = createFont(options.fontSize, options.fontWeight, options.fontFamily);
-  const textWidth = calcTextWidth(ctx, text);
-  const paddingLeft = options.paddingLeft || 0;
-  const paddingRight = options.paddingRight || 0;
-  const borderSize = options.borderSize || 0;
-  return paddingLeft + paddingRight + textWidth + (borderSize * 2)
-}
-
-/**
- * Get the height of the text box
- * @param options
- * @returns {number}
- */
-function getTextRectHeight (options) {
-  const paddingTop = options.paddingTop || 0;
-  const paddingBottom = options.paddingBottom || 0;
-  const borderSize = options.borderSize || 0;
-  const fontSize = options.fontSize || 0;
-  return paddingTop + paddingBottom + fontSize + (borderSize * 2)
-}
-
-/**
- * draw text with background
- * @export
- * @param {canvas} ctx
- * @param {string} txt
- * @param {number} x
- * @param {number} y
- * @param {object} options - styling options
- */
-function drawTextBG(ctx, txt, x, y, options) {
-
-  /// lets save current state as we make a lot of changes        
-  ctx.save();
-
-  ctx.font = createFont(options?.fontSize, options?.fontWeight, options?.fontFamily);
-  /// draw text from top - makes life easier at the moment
-  ctx.textBaseline = 'top';
-
-  /// color for background
-  ctx.fillStyle = options.bakCol || defaultOptions$1.bakCol;
-  
-  /// get width of text
-  let width = getTextRectWidth(ctx, txt, options);
-  let height = getTextRectHeight(options);
-
-  /// draw background rect
-  ctx.fillRect(x, y, width, height);
-
-  // draw text on top
-  ctx.fillStyle = options.txtCol || defaultOptions$1.txtCol;
-  x = x + options?.paddingLeft;
-  y = y + options?.paddingTop;
-  ctx.fillText(txt, x, y);
-  
-  /// restore original state
-  ctx.restore();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -3588,6 +2275,7 @@ class MouseAgent {
         return false;
       }
     }, { passive: false });
+
 
     element.addEventListener("mouseenter", (e) => {
       controller.raise(this, "mouseenter", this.createEventArgument(e));
@@ -4191,6 +2879,7 @@ class TouchAgent {
 			}
 		}, { passive: false });
 
+
 		window.addEventListener("touchend", (e) => {
 			if (e.touches) {
 				this.fingers = e.length;
@@ -4220,7 +2909,7 @@ class TouchAgent {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-const defaultOptions = {
+const defaultOptions$1 = {
   elementId: undefined,
   elementInstance: undefined,
   disableContextMenu: true,
@@ -4229,7 +2918,7 @@ const defaultOptions = {
 class InputController {
   constructor(element, options) {
     
-    this.options = { ...defaultOptions, ...options };
+    this.options = { ...defaultOptions$1, ...options };
     this.operationMode = OperationModes.None;
     this.element = element;
 
@@ -4248,6 +2937,7 @@ class InputController {
     this.currentAgent = null;
     
     if (this.options.disableContextMenu) {
+      console.log("culprit");
       window.oncontextmenu = (e) => {
         e.preventDefault();
         return false;
@@ -4288,6 +2978,2182 @@ new EventDispatcher(InputController).registerEvents(
   "drag", "begindrag", "enddrag"
 );
 
+// tool.js
+
+
+class Tool {
+
+  static #cnt = 0
+  static #instances = {}
+
+  #ID
+  #inCnt = null
+  #name
+  #shortName
+  #mediator
+  #options
+  #config
+  #core
+  #parent
+  #controller
+  #elChart
+  #elCanvas
+  #elViewport
+
+  #layerTool
+
+  #target
+
+  #cursorPos = [0, 0]
+  #cursorActive = false
+  #cursorClick
+
+  constructor(config) {
+    this.#config = config;
+    this.#inCnt = config.cnt;
+    this.#ID = this.#config.ID || uid("TX_Tool_");
+    this.#name = config.name;
+    this.#mediator = config.target.mediator;
+    this.#core = this.#mediator.api.core;
+    this.#elChart = this.#mediator.api.elements.elChart;
+    this.#parent = {...this.#mediator.api.parent};
+    this.#target = config.target;
+    this.#target.addTool(this);
+    this.#elViewport = this.#layerTool.viewport;
+    this.#elCanvas = this.#elViewport.scene.canvas;
+    this.#cursorClick = config.pos;
+  }
+
+  get inCnt() { return this.#inCnt }
+  get ID() { return this.#ID }
+  get name() {return this.#name}
+  get shortName() { return this.#shortName }
+  get mediator() { return this.#mediator }
+
+  get stateMachine() { return this.#mediator.stateMachine }
+
+  get state() { return this.#core.getState() }
+  get data() { return this.#core.chartData }
+  get range() { return this.#core.range }
+  get target() { return this.#target }
+  set layerTool(layer) { this.#layerTool = layer; }
+  get layerTool() { return this.#layerTool }
+  get elViewport() { return this.#elViewport }
+
+  get cursorPos() { return this.#cursorPos }
+  get cursorActive() { return this.#cursorActive }
+  get cursorClick() { return this.#cursorClick }
+  get candleW() { return this.#core.Timeline.candleW }
+  get theme() { return this.#core.theme }
+  get config() { return this.#core.config }
+  get scrollPos() { return this.#core.scrollPos }
+  get bufferPx() { return this.#core.bufferPx }
+
+
+  static create(target, config) {
+    const cnt = ++Tool.#cnt;
+    
+    config.cnt = cnt;
+    config.modID = `${config.toolID}_${cnt}`;
+    config.toolID = config.modID;
+    config.target = target;
+
+    const tool = new config.tool(config);
+
+    Tool.#instances[cnt] = tool;
+    target.chartToolAdd(tool);
+
+    return tool
+  }
+
+  static destroy(tool) {
+    if (tool.constructor.name === "Tool") {
+      const inCnt = tool.inCnt;
+      delete Tool.#instances[inCnt];
+    }
+  }
+
+
+  end() { this.stop(); }
+
+  stop() {
+    // this.#controller.removeEventListener("mousemove", this.onMouseMove);
+    // this.#controller.removeEventListener("mouseenter", this.onMouseEnter);
+    // this.#controller.removeEventListener("mouseout", this.onMouseOut);
+
+    // this.off("main_mousemove", this.onMouseMove)
+
+    // progress state from active to idle
+  }
+
+  eventsListen() {
+    // create controller and use 'on' method to receive input events 
+    this.#controller = new InputController(this.#elCanvas, {disableContextMenu: false});
+
+    // move event
+    this.#controller.on("mousemove", this.onMouseMove.bind(this));
+    // // enter event
+    // this.#controller.on("mouseenter", this.onMouseEnter.bind(this));
+    // // out event
+    // this.#controller.on("mouseout", this.onMouseOut.bind(this));
+
+    // // listen/subscribe/watch for parent notifications
+    // this.on("main_mousemove", (pos) => this.updateLegends(pos))
+  }
+
+  on(topic, handler, context) {
+    this.#core.on(topic, handler, context);
+  }
+
+  off(topic, handler) {
+    this.#core.off(topic, handler);
+  }
+
+  emit(topic, data) {
+    this.#core.emit(topic, data);
+  }
+
+  onMouseMove(e) {
+    // this.#cursorPos = [e.layerX, e.layerY]
+    this.#cursorPos = [Math.floor(e.position.x), Math.floor(e.position.y)];
+
+    this.emit("tool_mousemove", this.#cursorPos);
+
+  }
+
+  createViewport() {
+    this.config.buffer || BUFFERSIZE;
+    this.#elViewport.clientWidth;
+    this.#options.chartH || this.#parent.rowsH - 1;
+  }
+
+  draw() {
+
+  }
+
+}
+
+// fibonacci
+
+
+class Fibonacci extends Tool {
+
+  constructor(config) {
+    super(config);
+  }
+
+}
+
+// line.js
+
+// import tinycolor from 'tinycolor2';
+
+
+class Line extends Tool {
+
+  #colour = lineConfig.colour
+  #lineWidth = lineConfig.lineWidth
+
+  constructor(config) {
+    super(config);
+  }
+
+  set colour(colour=this.#colour) {
+    // const c = tinycolor(colour)
+    // this.#colour = (c.isValid()) ? colour : this.#colour
+    this.#colour = colour;
+  }
+  get colour() { return this.#colour }
+  set lineWidth(width) { this.#lineWidth = (isNumber(width)) ? width : this.#lineWidth; }
+  get lineWidth() { return this.#lineWidth }
+
+  start() {
+    this.eventsListen();
+    // // start State Machine 
+    // stateMachineConfig.context.origin = this
+    // this.#mediator.stateMachine = stateMachineConfig
+    // this.#mediator.stateMachine.start()
+    // this.emit(`tool_start`, this.ID)
+    // // progress state from idle to active
+    // this.#mediator.stateMachine.notify(`tool_${this.#name}_start`, this.ID)
+
+    let [x1, y1] = this.cursorClick;
+
+    const scene = this.layerTool.scene;
+    scene.clear();
+    const ctx = this.layerTool.scene.context;
+
+    ctx.save();
+
+    ctx.lineWidth = this.lineWidth;
+    ctx.strokeStyle = this.colour;
+
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(300, 150);
+    ctx.stroke();
+    ctx.closePath();
+
+    ctx.restore();
+
+    this.elViewport.render();
+  }
+
+
+}
+
+// measure.js
+
+
+class Measure extends Tool {
+
+  constructor(config) {
+    super(config);
+  }
+
+}
+
+// range.js
+
+
+class Range$1 extends Tool {
+
+  constructor(config) {
+    super(config);
+  }
+
+}
+
+// text.js
+
+
+class Text extends Tool {
+
+  constructor(config) {
+    super(config);
+  }
+
+}
+
+// tools.js
+
+var tools = [
+  {
+    id: "cursor",
+    name: "Cursor",
+    icon: cursor,
+    event: "tool_activated",
+  },
+  {
+    id: "line",
+    name: "Line",
+    icon: line,
+    event: "tool_activated",
+    class: Line,
+    sub: [
+      {
+        id: "ray",
+        name: "Ray",
+        icon: line,
+        event: "tool_activated",
+        class: Line,
+      },
+      {
+        id: "hRay",
+        name: "Horizontal Ray",
+        icon: line,
+        event: "tool_activated",
+        class: Line,
+      },
+      {
+        id: "vRay",
+        name: "Vertical Ray",
+        icon: line,
+        event: "tool_activated",
+        class: Line,
+      },
+    ]
+  },
+  {
+    id: "fibonacci",
+    name: "Fibonacci",
+    icon: fibonacci,
+    event: "tool_activated",
+    class: Fibonacci,
+    sub: [
+      {
+        id: "fib",
+        name: "Not Implemented Yet",
+        icon: line,
+      }
+    ]
+  },
+  {
+    id: "range",
+    name: "Range",
+    icon: range,
+    event: "tool_activated",
+    class: Range$1,
+    sub: [
+      {
+        id: "rng",
+        name: "Not Implemented Yet",
+        icon: line,
+      }
+    ]
+  },
+  {
+    id: "text",
+    name: "Text",
+    icon: text,
+    event: "tool_activated",
+    class: Text,
+    sub: [
+      {
+        id: "txt",
+        name: "Not Implemented Yet",
+        icon: line,
+      }
+    ]
+  },
+  {
+    id: "measure",
+    name: "Measure",
+    icon: measure,
+    event: "tool_activated",
+    class: Measure,
+  },
+  {
+    id: "delete",
+    name: "Delete",
+    icon: del,
+    event: "tool_activated",
+    class: undefined,
+  }
+];
+
+const lineConfig = {
+  colour: "#8888AACC",
+  lineWidth: 1
+};
+
+const TIMEUNITS = ['y','M','d','h','m','s','ms'];
+const TIMEUNITSLONG = ['years','months','days','hours','minutes','seconds','milliseconds'];
+const dayCntInc = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+const dayCntLeapInc = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335];
+const monthDayCnt = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 ];
+
+// BTC Genesis Block: 03/01/2009, 19:15:05
+const BTCGENESIS = 1231006505000;
+const SECOND_MS = 1000;
+const MINUTE_MS = SECOND_MS*60;
+const HOUR_MS = MINUTE_MS*60;
+const DAY_MS = HOUR_MS*24;
+const WEEK_MS = DAY_MS*7;
+const MONTHR_MS = DAY_MS*30;
+function MONTH_MS(m=3, l=false) { 
+  let ms = monthDayCnt[m % 12] * DAY_MS;
+  if (l && m > 0) ms += DAY_MS;
+  return ms
+}
+const YEAR_MS = DAY_MS*365;
+const TIMEUNITSVALUESSHORT = {
+  y: YEAR_MS, 
+  M: MONTHR_MS,
+  w: WEEK_MS,
+  d: DAY_MS,
+  h: HOUR_MS,
+  m: MINUTE_MS,
+  s: SECOND_MS,
+};
+const TIMEUNITSVALUESLONG = {
+  years: YEAR_MS,
+  months: MONTHR_MS,
+  weeks: WEEK_MS,
+  days: DAY_MS,
+  hours: HOUR_MS,
+  minutes: MINUTE_MS,
+  seconds: SECOND_MS,
+};
+const TIMEUNITSVALUES = { ...TIMEUNITSVALUESSHORT, ...TIMEUNITSVALUESLONG };
+
+const timezones = {
+  0: 'Europe/London',
+  '-120': 'Europe/Tallinn',
+  '-60': 'Europe/Zurich',
+  180: 'America/Santiago',
+  300: 'America/Toronto',
+  240: 'America/Caracas',
+  360: 'America/Mexico_City',
+  540: 'America/Juneau',
+  480: 'America/Vancouver',
+  420: 'US/Mountain',
+  120: 'America/Sao_Paulo',
+  '-360': 'Asia/Almaty',
+  '-300': 'Asia/Ashkhabad',
+  '-180': 'Europe/Moscow',
+  '-420': 'Asia/Jakarta',
+  '-480': 'Asia/Taipei',
+  '-240': 'Asia/Muscat',
+  '-345': 'Asia/Kathmandu',
+  '-330': 'Asia/Kolkata',
+  '-540': 'Asia/Tokyo',
+  '-210': 'Asia/Tehran',
+  '-660': 'Pacific/Norfolk',
+  '-630': 'Australia/Adelaide',
+  '-600': 'Australia/Brisbane',
+  '-780': 'Pacific/Fakaofo',
+  '-825': 'Pacific/Chatham',
+  600: 'Pacific/Honolulu',
+};
+
+function getTimezone() {
+  const offset = new Date().getTimezoneOffset();
+
+  if (Object.prototype.hasOwnProperty.call(timezones, offset)) {
+    return timezones[offset.toString()];
+  }
+  return 'Etc/UTC';
+}
+
+function buildSubGrads() {
+  const grads = {};
+  for (let unit in TIMEUNITSVALUESSHORT) {
+    let i = 0;
+    grads[unit] = [];
+    do {
+      grads[unit].push(Math.round(TIMEUNITSVALUESSHORT[unit] * i));
+      i += 0.125;
+    }
+    while(i < 1)
+  }
+  return grads
+}
+
+
+function isValidTimestamp( _timestamp ) {
+  const newTimestamp = new Date(_timestamp).getTime();
+  return isNumber(newTimestamp);
+}
+
+function isValidTimeInRange( time, start=BTCGENESIS,end=Date.now() ) {
+  if (!isValidTimestamp(time)) return false
+  return (time > start && time < end) ? true : false
+}
+
+const timestampDiff = {
+
+  inSeconds: function(d1, d2) {
+        d1 = new Date(d1);
+        d2 = new Date(d2);
+    var t2 = d2.getTime();
+    var t1 = d1.getTime();
+
+    return parseInt((t2-t1)/SECOND_MS);
+  },
+  inMinutes: function(d1, d2) {
+        d1 = new Date(d1);
+        d2 = new Date(d2);
+    let t2 = d2.getTime();
+    let t1 = d1.getTime();
+
+    return parseInt((t2-t1)/MINUTE_MS);
+  },
+
+  inHours: function(d1, d2) {
+        d1 = new Date(d1);
+        d2 = new Date(d2);
+    let t2 = d2.getTime();
+    let t1 = d1.getTime();
+
+    return parseInt((t2-t1)/HOUR_MS);
+  },
+
+  inDays: function(d1, d2) {
+        d1 = new Date(d1);
+        d2 = new Date(d2);
+    let t2 = d2.getTime();
+    let t1 = d1.getTime();
+
+    return parseInt((t2-t1)/DAY_MS);
+  },
+
+  inWeeks: function(d1, d2) {
+        d1 = new Date(d1);
+        d2 = new Date(d2);
+    let t2 = d2.getTime();
+    let t1 = d1.getTime();
+
+    return parseInt((t2-t1)/WEEK_MS);
+  },
+
+  inMonths: function(d1, d2) {
+         d1 = new Date(d1);
+         d2 = new Date(d2);
+    let d1Y = d1.getUTCFullYear();
+    let d2Y = d2.getUTCFullYear();
+    let d1M = d1.getUTCMonth();
+    let d2M = d2.getUTCMonth();
+
+    return (d2M+12*d2Y)-(d1M+12*d1Y);
+  },
+
+  inYears: function(d1, d2) {
+    let d1Y = new Date(d1);
+    let d2Y = new Date(d2);
+    return d2Y.getUTCFullYear()-d1Y.getUTCFullYear();
+  }
+  
+};
+
+/**
+ * Timestamp difference in multiple units
+ *
+ * @param {timestamp} date1 - milliseconds
+ * @param {timestamp} date2 - milliseconds
+ * @return {object}  
+ */
+function timestampDifference(date1,date2) {
+  let years = timestampDiff.inYears(date1,date2);
+  let months = timestampDiff.inMonths(date1,date2);
+  let weeks = timestampDiff.inWeeks(date1,date2);
+  let days = timestampDiff.inDays(date1,date2);
+  let hours = timestampDiff.inHours(date1,date2);
+  let minutes = timestampDiff.inMinutes(date1,date2);
+  let seconds = timestampDiff.inSeconds(date1,date2);
+  let milliseconds = new Date(date2).getTime() - new Date(date1).getTime();
+
+  return {
+    y: years,
+    M: months,
+    w:weeks,
+    d:days,
+    h:hours,
+    m:minutes,
+    s:seconds,
+    ms:milliseconds,
+    
+    years: years,
+    months: months,
+    weeks:weeks,
+    days:days,
+    hours:hours,
+    minutes:minutes,
+    seconds:seconds,
+    milliseconds:milliseconds
+  }
+}
+
+function isTimeFrame(tf) {
+  let ms = SECOND_MS;
+  if (isString(tf)) {
+    ms = interval2MS(tf);
+    if (ms) tf = tf;
+    else {
+      ms = SECOND_MS;
+      tf = "1s";
+    }
+  }
+  else tf = "1s";
+  return {tf, ms}
+}
+
+/**
+ * convert interval (timeframe) string to milliseconds
+ * @export
+ * @param {string} tf
+ * @return {number}
+ */
+function interval2MS(tf) {
+  if (!isString(tf)) return false
+
+  const regex = /([0-9]{1,2})([s|m|h|d|w|M|y])/gm;
+  let m;
+  if ((m = regex.exec(tf)) !== null) {
+    return TIMEUNITSVALUESSHORT[m[2]] * m[1]
+  }
+  else return false
+}
+
+/**
+ * Milliseconds broken down into major unit and remainders
+ *
+ * @export
+ * @param {number} milliseconds
+ * @return {object}  
+ */
+function ms2TimeUnits( milliseconds ) {
+  // let years, months, _weeks, weeks, days, hours, minutes, seconds;
+  let seconds = Math.floor(milliseconds / 1000);
+  let minutes = Math.floor(seconds / 60);
+      seconds = seconds % 60;
+  let hours = Math.floor(minutes / 60);
+      minutes = minutes % 60;
+  let days = Math.floor(hours / 24);
+      hours = hours % 24;
+  let _weeks = Math.floor(days / 7);
+      days = days % 7;
+  let months = Math.floor(_weeks / 4);
+  let years = Math.floor(_weeks / 52);
+  let weeks = _weeks % 4;
+  // accumulative extra days of months (28 days) 
+  // in 1 year (365 days) = 29 days
+  // thus...
+  months = months % 13;
+
+  return {
+    y: years,
+    M: months,
+    w: weeks,
+    d: days,
+    h: hours,
+    m: minutes,
+    s: seconds,
+    
+    years: years,
+    months: months,
+    weeks: weeks,
+    days: days,
+    hours: hours,
+    minutes: minutes,
+    seconds: seconds,
+  };
+}
+
+function ms2Interval( milliseconds ) {
+  const intervals = ms2TimeUnits(milliseconds);
+  for (const unit in intervals) {
+    if (intervals[unit]) return `${intervals[unit]}${unit}`
+  }
+}
+
+function get_second(t) {
+  return t ? new Date(t).getUTCSeconds() : null
+}
+
+function second_start(t) {
+  let start = new Date(t);
+  return start.setUTCMilliseconds(0,0)
+}
+
+function get_minute(t) {
+  return t ? new Date(t).getUTCMinutes() : null
+}
+
+function minute_start(t) {
+  let start = new Date(t);
+  return start.setUTCSeconds(0,0)
+}
+
+function get_hour(t) {
+  return t ? new Date(t).getUTCHours() : null
+}
+
+function hour_start(t) {
+  let start = new Date(t);
+  return start.setUTCMinutes(0,0,0)
+}
+
+/**
+ * day number of the month
+ *
+ * @param {timestamp} t - timestamp ms
+ * @return {number} - day number of the month
+ */
+ function get_day(t) {
+  return t ? new Date(t).getUTCDate() : null
+}
+
+function get_dayName(t, locale="en-GB", len="short") {
+  return new Date(t).toLocaleDateString(locale, {weekday: len})
+}
+
+/**
+ * Start of the day (zero millisecond)
+ *
+ * @param {timestamp} t - timestamp ms
+ * @return {timestamp} - timestamp ms
+ */
+ function day_start(t) {
+  return new Date(t).setUTCHours(0,0,0,0)
+}
+
+/**
+ * month number of the year
+ *
+ * @param {timestamp} t - timestamp ms
+ * @return {number} - month number of the year
+ */
+ function get_month(t) {
+  if (!t) return undefined
+  return new Date(t).getUTCMonth()
+}
+
+function get_monthName(t, locale="en-GB", len="short") {
+  return new Date(t).toLocaleDateString(locale, {month: len})
+}
+
+/**
+ * Start of the month (zero millisecond)
+ *
+ * @param {timestamp} t - timestamp ms
+ * @return {timestamp} - timestamp ms
+ */
+ function month_start(t) {
+  let date = new Date(t);
+  return Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(), 1
+  )
+}
+
+function nextMonth(t) {
+  let m = (get_month(t) + 1) % 12;
+  t += MONTH_MS(m, isLeapYear(t));
+  return t
+}
+
+/**
+ * the year
+ *
+ * @param {timestamp} t - timestamp ms
+ * @return {number} - the year
+ */
+ function get_year(t) {
+  if (!t) return undefined
+  return new Date(t).getUTCFullYear()
+}
+
+/**
+ * Start of the year (zero millisecond)
+ *
+ * @param {timestamp} t - timestamp ms
+ * @return {timestamp} - timestamp ms
+ */
+ function year_start(t) {
+  return Date.UTC(new Date(t).getUTCFullYear())
+}
+
+function nextYear(t) {
+  t = t + YEAR_MS + DAY_MS;
+  if (!isLeapYear(t)) ;
+  return t
+}
+
+function isLeapYear(t) {
+  let date = new Date(t);
+  let year = date.getUTCFullYear();
+  if((year & 3) != 0) return false;
+  return ((year % 100) != 0 || (year % 400) == 0);
+}
+
+function dayOfYear(t) {
+  let date = new Date(t);
+  let mn = date.getUTCMonth();
+  let dn = date.getUTCDate();
+  let dayOfYear = dayCount[mn] + dn;
+  if(mn > 1 && isLeapYear()) dayOfYear++;
+  return dayOfYear;
+}
+
+var Time = /*#__PURE__*/Object.freeze(/*#__PURE__*/Object.defineProperty({
+  __proto__: null,
+  TIMEUNITS: TIMEUNITS,
+  TIMEUNITSLONG: TIMEUNITSLONG,
+  dayCntInc: dayCntInc,
+  dayCntLeapInc: dayCntLeapInc,
+  monthDayCnt: monthDayCnt,
+  BTCGENESIS: BTCGENESIS,
+  SECOND_MS: SECOND_MS,
+  MINUTE_MS: MINUTE_MS,
+  HOUR_MS: HOUR_MS,
+  DAY_MS: DAY_MS,
+  WEEK_MS: WEEK_MS,
+  MONTHR_MS: MONTHR_MS,
+  MONTH_MS: MONTH_MS,
+  YEAR_MS: YEAR_MS,
+  TIMEUNITSVALUESSHORT: TIMEUNITSVALUESSHORT,
+  TIMEUNITSVALUESLONG: TIMEUNITSVALUESLONG,
+  TIMEUNITSVALUES: TIMEUNITSVALUES,
+  timezones: timezones,
+  getTimezone: getTimezone,
+  buildSubGrads: buildSubGrads,
+  isValidTimestamp: isValidTimestamp,
+  isValidTimeInRange: isValidTimeInRange,
+  timestampDiff: timestampDiff,
+  timestampDifference: timestampDifference,
+  isTimeFrame: isTimeFrame,
+  interval2MS: interval2MS,
+  ms2TimeUnits: ms2TimeUnits,
+  ms2Interval: ms2Interval,
+  get_second: get_second,
+  second_start: second_start,
+  get_minute: get_minute,
+  minute_start: minute_start,
+  get_hour: get_hour,
+  hour_start: hour_start,
+  get_day: get_day,
+  get_dayName: get_dayName,
+  day_start: day_start,
+  get_month: get_month,
+  get_monthName: get_monthName,
+  month_start: month_start,
+  nextMonth: nextMonth,
+  get_year: get_year,
+  year_start: year_start,
+  nextYear: nextYear,
+  isLeapYear: isLeapYear,
+  dayOfYear: dayOfYear
+}, Symbol.toStringTag, { value: 'Module' }));
+
+// state-chart.js
+
+var stateMachineConfig$6 = {
+  id: "template",
+  initial: "idle",
+  context: {},
+  states: {
+    idle: {
+      onEnter(data) {
+        console.log('idle: onEnter');
+      },
+      onExit(data) {
+        console.log('idle: onExit');
+      },
+      on: {
+        tool_activated: {
+          target: 'tool_activated',
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "idle"`)
+            this.context.origin.onToolActivated(data);
+          },
+        },
+      }
+    },
+    tool_activated: {
+      onEnter (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
+      },
+      onExit (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
+      },
+      on: {
+        tool_targetSelected: {
+          target: 'tool_addToTarget',
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "onIdle"`)
+            this.context.origin.onToolTargetSelected(data);
+          },
+        },
+      }
+    },
+    tool_addToTarget: {
+      onEnter (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
+      },
+      onExit (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
+      },
+      on: {
+        always: {
+          target: 'idle',
+          condition: 'toolTarget',
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "onIdle"`)
+            this.context.origin.addNewTool();
+          },
+        },
+      }
+    },
+  },
+
+  guards: {
+    toolTarget () { return true }
+  }
+};
+
+// tools.js
+
+
+/**
+ * Provides the drawing tools for the chart.
+ * @export
+ * @class ToolsBar
+ */
+class ToolsBar {
+
+  #name = "Toolbar"
+  #shortName = "tools"
+  #mediator
+  #options
+  #elTools
+  #widgets
+
+  #Tool = Tool
+  #tools
+  #toolClasses = {}
+  #activeTool = undefined
+  #toolTarget
+
+
+  constructor (mediator, options) {
+
+    this.#mediator = mediator;
+    this.#options = options;
+    this.#elTools = mediator.api.elements.elTools;
+    this.#tools = tools || options.tools;
+    this.#widgets = this.#mediator.api.core.WidgetsG;
+    this.init();
+  }
+
+  log(l) { this.#mediator.log(l); }
+  info(i) { this.#mediator.info(i); }
+  warning(w) { this.#mediator.warn(w); }
+  error(e) { this.#mediator.error(e); }
+
+  get name() {return this.#name}
+  get shortName() {return this.#shortName}
+  get mediator() {return this.#mediator}
+  get options() {return this.#options}
+  get pos() { return this.dimensions }
+  get dimensions() { return DOM.elementDimPos(this.#elTools) }
+
+  init() {
+    this.mount(this.#elTools);
+
+    this.log(`${this.#name} instantiated`);
+  }
+
+
+  start() {
+    // build toolbar
+    this.initAllTools();
+    // add all on and off chart tools
+    this.addAllTools();
+    // set up event listeners
+    this.eventsListen();
+
+    // start State Machine 
+    stateMachineConfig$6.context.origin = this;
+    this.#mediator.stateMachine = stateMachineConfig$6;
+    this.#mediator.stateMachine.start();
+  }
+
+  end() {
+    this.#mediator.stateMachine.destroy();
+    // remove event listeners
+    const api = this.#mediator.api;
+    const tools = DOM.findBySelectorAll(`#${api.id} .${CLASS_TOOLS} .icon-wrapper`);
+    for (let tool of tools) {
+      for (let t of this.#tools) {
+        if (t.id === id)
+          tool.removeEventListener("click", this.onIconClick);
+      }
+    }
+
+    this.off("tool_selected", this.onToolSelect);
+    this.off("tool_deselected", this.onToolDeselect);
+  }
+
+  eventsListen() {
+    this.on("tool_selected", (e) => { this.onToolSelect.bind(this); });
+    this.on("tool_deselected", (e) => { this.onToolDeselect.bind(this); });
+  }
+
+  on(topic, handler, context) {
+    this.#mediator.on(topic, handler, context);
+  }
+
+  off(topic, handler) {
+    this.#mediator.off(topic, handler);
+  }
+
+  emit(topic, data) {
+    this.#mediator.emit(topic, data);
+  }
+
+  onIconClick(e) {
+    e.currentTarget.dataset.event;
+        let menu = e.currentTarget.dataset.menu || false,
+        data = {
+          target: e.currentTarget.id,
+          menu: menu,
+          evt: e.currentTarget.dataset.event,
+          tool: e.currentTarget.dataset.tool
+        };
+        
+    // this.emit(evt, data)
+
+    if (menu) this.emit("openMenu", data);
+    else {
+      this.emit("menuItemSelected", data);
+    }
+  }
+
+  onToolTargetSelected(tool) {
+    console.log("tool_targetSelected", tool.target);
+    this.#toolTarget = tool.target;
+  }
+
+  onToolActivated(tool) {
+    console.log("Tool activated:", tool);
+    this.#activeTool = tool;
+  }
+
+  onToolSelect(e) {
+
+  }
+
+  onToolDeselect(e) {
+
+  }
+
+  mount(el) {
+    el.innerHTML = this.defaultNode();
+  }
+
+  initAllTools() {
+    const api = this.#mediator.api;
+    const tools = DOM.findBySelectorAll(`#${api.id} .${CLASS_TOOLS} .icon-wrapper`);
+    for (let tool of tools) {
+
+      let id = tool.id, //.replace('TX_', ''),
+          svg = tool.querySelector('svg');
+          svg.style.fill = ToolsStyle.COLOUR_ICON;
+          svg.style.width = "90%";
+
+      for (let t of this.#tools) {
+        if (t.id === id) {
+          tool.addEventListener("click", this.onIconClick.bind(this));
+          if (t?.sub) {
+            let config = {
+              content: t.sub,
+              primary: tool
+            };
+            let menu = this.#widgets.insert("Menu", config);
+            tool.dataset.menu = menu.id;
+            menu.start();
+
+            for (let s of t.sub) {
+              this.#toolClasses[s.id] = s.class;
+            }
+          }
+          else {
+            this.#toolClasses[t.id] = t.class;
+          }        
+        }
+      }
+    }
+  }
+
+  defaultNode() {
+    let toolbar = "";
+    for (const tool of this.#tools) {
+      toolbar += this.iconNode(tool);
+    }
+
+    return toolbar
+  }
+
+  iconNode(tool) {
+    const iconStyle = `display: inline-block; height: ${this.#elTools.clientWidth}px; padding-right: 2px`;
+    const menu = ("sub" in tool) ? `data-menu="true"` : "";
+    return  `
+      <div id="${tool.id}" data-event="${tool.event}" ${menu} class="icon-wrapper" style="${iconStyle}">${tool.icon}</div>\n
+    `
+  }
+
+  /**
+   * add tool to chart row from data state
+   * or add as new tool from toolbar
+   * @param {class} tool 
+   * @param {object} target
+   */
+  addTool(tool=this.#activeTool, target=this.#toolTarget) {
+    let config = {
+      name: tool,
+      tool: this.#toolClasses[tool],
+      pos: target.cursorClick
+    };
+    let toolInstance = this.#Tool.create(target, config);
+    toolInstance.start();
+    
+    console.log(toolInstance);
+    return toolInstance
+  }
+
+  addNewTool(tool, target) {
+    let t = this.addTool(tool, target);
+    this.activeTool = (t);
+    this.emit(`tool_active`, t);
+    this.emit(`tool_${t.ID}_active`, t);
+
+    // add tool entry to Data State
+  }
+
+  // add all on and off chart tools
+  addAllTools() {
+    // iterate over Data State to add all tools
+  }
+
+}
+
+// axis.js
+
+class Axis {
+
+  #core
+  #parent
+  #chart
+
+  constructor(parent, chart) {
+    this.#chart = chart;
+    this.#parent = parent;
+    this.#core = this.#parent.core;
+  }
+
+  get core() { return this.#chart.core }
+  get chart() { return this.#chart }
+  get parent() { return this.#parent }
+  get width() { return this.#chart.width }
+  get height() { return this.#chart.height }
+  get data() { return this.#chart.data }
+  get range() { return this.#chart.range }
+  get yDigits() { return this.#chart.yAxisDigits }
+
+  float2Int(value) { return float2Int(value) }
+  numDigits(value) { return numDigits(value) }
+  countDigits(value) { return countDigits(value) }
+  precision(value) { return precision(value) }
+
+}
+
+// xAxis.js
+
+class xAxis extends Axis {
+
+  #xAxisTicks = 4
+  #xAxisGrads
+  #xAxisSubGrads
+
+  constructor(parent, chart) {
+    super(parent, chart);
+
+    this.#xAxisSubGrads = buildSubGrads();
+  }
+
+  get chart() { return this.parent.mediator.api.Chart }
+  get core() { return this.chart.core }
+  get data() { return this.chart.data }
+  get range() { return this.parent.range }
+  get width() { return this.calcWidth() }
+  get interval() { return this.range.interval }
+  get intervalStr() { return this.range.intervalStr }
+  get timeStart() { return this.range.timeStart }
+  get timeFinish() { return this.range.timeFinish }
+  get rangeDuration() { return this.range.rangeDuration }
+  get rangeLength() { return this.range.Length }
+  get indexStart() { return this.range.indexStart }
+  get indexEnd() { return this.range.indexEnd }
+  get timeMax() { return this.range.timeMax }
+  get timeMin() { return this.range.timeMin }
+  get candleW() { return round(this.width / this.range.Length, 1) }
+  get gradsMax() { return Math.trunc(this.width / MAXGRADSPER) }
+      gradsYear(t) { return get_year(t) }
+      gradsMonthName(t) { return get_monthName(t) }
+      gradsDayName(t) { return get_dayName(t) +" "+ get_day(t) }
+      gradsHour(t) { return get_hour(t) + ":00" }
+      gradsMinute(t) { return "00:" + get_minute(t) }
+  get xAxisRatio() { return this.width / this.range.rangeDuration }
+  set xAxisTicks(t) { this.#xAxisTicks = isNumber(t) ? t : 0; }
+  get xAxisTicks() { return this.#xAxisTicks }
+  get xAxisGrads() { return this.#xAxisGrads }
+  get xAxisSubGrads() { return this.#xAxisSubGrads }
+  get scrollOffsetPx() { return this.core.scrollPos % this.candleW }
+  get bufferPx() { return this.core.bufferPx }
+
+  calcWidth() {
+    return this.core.Chart.width - this.core.Chart.scale.width
+  }
+
+  /**
+ * return canvas x co-ordinate
+ * handles X Axis modes: default, indexed
+ * @param {number} ts - chart time stamp
+ * @return {number}  
+ * @memberof xAxis
+ */
+  xPos(ts) {
+    return (this.range.rangeIndex(ts) * this.candleW) + (this.candleW * 0.5)
+  }
+
+  t2Pixel(ts) {
+    return this.xPos(ts)
+  }
+
+  pixel2T(x) {
+    let c = this.pixel2Index(x);
+    return this.range.value(c)[0]
+  }
+
+  pixel2Index(x) {
+    let o = this.core.rangeScrollOffset;
+    let c = this.range.indexStart - o; 
+    return c + 1
+      + Math.floor((x + (this.core.scrollPos * -1)) / this.candleW) 
+  }
+
+  pixelOHLCV(x) {
+    let c = this.pixel2Index(x);
+    return this.range.value(c)
+  }
+
+  xPosSnap2CandlePos(x) {
+    this.core.scrollPos % this.candleW;
+    // let o = (x % this.candleW < this.candleW / 2) ? this.candleW : this.candleW * -1
+    let c = Math.floor((x / this.candleW)); // + o
+    return  (c * this.candleW) + (this.candleW / 2) // + o
+
+    // return ((this.pixel2Index(x) - this.range.indexStart) 
+    //         * this.candleW) - (this.candleW / 2)
+  }
+
+  /**
+   * return chart time
+   * handles X Axis modes: default, indexed
+   * @param {number} x
+   * @returns {timestamp}
+   * @memberof xAxis
+   */
+  xPos2Time(x) {
+    return this.pixel2T(x)
+  }
+
+  xPos2Index(x) {
+    return this.pixel2Index(x)
+  }
+
+  xPosOHLCV(x) {
+    return this.pixelOHLCV(x)
+  }
+
+  initXAxisGrads() {
+    this.#xAxisGrads = this.calcXAxisGrads();
+  }
+
+  calcXAxisGrads() {
+    const rangeStart = this.timeMin;
+    const rangeEnd = this.timeMax;
+    const intervalStr = this.intervalStr;
+    const grads = {
+      entries: {},
+      values: [],
+      major: [],
+      minor: []
+    };
+    intervalStr.charAt(intervalStr.length - 1);
+
+// return grads
+
+      let days, t1, t2, units, unitStart, 
+          majorGrad, majorValue, minorValue;
+    
+      units = ms2TimeUnits(this.rangeDuration);
+      grads.units = ms2TimeUnits(this.rangeDuration);
+    
+    // Years
+    if (units.years > 0) {
+            
+      t1 = year_start(rangeStart);
+      t2 = nextYear(year_start(rangeEnd)) + YEAR_MS;
+
+      grads.unit = ["y", "year"];
+      grads.timeSpan = `${units.years} years`;
+
+      majorGrad = (ts) => { return nextYear(ts) };
+
+      unitStart = (ts) => { return month_start(ts) };
+
+      majorValue = (ts) => { 
+        return get_year(ts) 
+      };
+      minorValue = (ts) => { 
+        if (get_month(ts) == 0 && get_day(ts) == 1 && get_hour(ts) == 0) return get_year(ts)
+        else return get_monthName(ts) 
+      };
+
+      return this.buildGrads(grads, t1, t2, majorGrad, majorValue, minorValue, unitStart)
+    }
+      
+    // Months
+    else if (units.months > 0) {
+
+      t1 = month_start(rangeStart);
+      t2 = month_start(rangeEnd) + MONTH_MS(get_month(rangeEnd));// + YEAR_MS
+
+      grads.unit = ["M", "month"];
+      grads.timeSpan = `${units.months} months`;
+
+      // TODO: optimize nextMonth() - too slow on large rages
+      // majorGrad = (ts) => { return nextMonth(ts) }
+      majorGrad = (ts) => { return MONTHR_MS };
+
+      unitStart = (ts) => { return day_start(ts) };
+
+      majorValue = (ts) => { 
+        if (get_month(ts) == 0) return get_year(ts)
+        else return get_monthName(ts)
+      };
+      minorValue = (ts) => {
+        if (get_month(ts) == 0 && get_day(ts) == 1) return get_year(ts)
+        if (get_day(ts) == 1 && get_hour(ts) == 0) return get_monthName(ts)
+        else return this.gradsDayName(ts) 
+      };
+
+      return this.buildGrads(grads, t1, t2, majorGrad, majorValue, minorValue, unitStart)
+    }
+    
+    // Days
+    else if (units.weeks > 0 || units.days > 0) {
+      days = units.weeks * 7 + units.days;
+
+      t1 = day_start(rangeStart);
+      t2 = day_start(rangeEnd) + WEEK_MS;
+
+      grads.unit = ["d", "day"];
+      grads.timeSpan = `${days} days`;
+
+      majorGrad = (ts) => { return DAY_MS };
+
+      unitStart = (ts) => { return hour_start(ts) };
+
+      majorValue = (ts) => { 
+        if (get_month(ts) == 0 && get_day(ts) == 1) return get_year(ts)
+        else if (get_day(ts) == 1) return get_monthName(ts)
+        else return this.gradsDayName(ts) // null
+      };
+      minorValue = (ts) => { 
+        if (get_day(ts) == 1 && get_hour(ts) == 0) return get_monthName(ts)
+        else if (get_hour(ts) == 0) return this.gradsDayName(ts)
+        else return get_hour(ts) + ":00" 
+      };
+
+      return this.buildGrads(grads, t1, t2, majorGrad, majorValue, minorValue, unitStart)
+    }
+    
+    // Hours
+    else if (units.hours > 0) {
+      
+      t1 = hour_start(rangeStart);
+      t2 = hour_start(rangeEnd) + DAY_MS;
+
+      grads.unit = ["h", "hour"];
+      grads.timeSpan = `${units.hours} hours`;
+
+      majorGrad = (ts) => { return HOUR_MS };
+        
+      unitStart = (ts) => { return minute_start(ts) };
+
+      majorValue = (ts) => {
+        if (get_month(ts) == 0 && get_day(ts) == 1 && get_hour(ts) == 0) return get_year(ts)
+        else if (get_day(ts) == 1 && get_hour(ts) == 0) return get_monthName(ts)
+        else if (get_hour(ts) == 0) return this.gradsDayName(ts)
+        else return this.HM(ts)
+      };
+      minorValue = (ts) => { return this.HM(ts) };
+
+      return this.buildGrads(grads, t1, t2, majorGrad, majorValue, minorValue, unitStart)
+    }
+    
+    // Minutes
+    else if (units.minutes > 0) {
+      
+      t1 = minute_start(rangeStart);
+      t2 = minute_start(rangeEnd) + HOUR_MS;
+
+      grads.unit = ["m", "minute"];
+      grads.timeSpan = `${units.minutes} minutes`;
+
+      majorGrad = (ts) => { return MINUTE_MS };
+
+      unitStart = (ts) => { return second_start(ts) };
+
+      majorValue = (ts) => {
+        if (get_month(ts) == 0 && get_day(ts) == 1 && get_hour(ts) == 0 && get_minute(ts) == 0) return get_year(ts)
+        else if (get_day(ts) == 1 && get_hour(ts) == 0 && get_minute(ts) == 0) return get_monthName(ts)
+        else if (get_hour(ts) == 0 && get_minute(ts) == 0) return this.gradsDayName(ts)
+        else return this.HM(ts)
+      };
+      minorValue = (ts) => { return this.HMS(ts) };
+
+      return this.buildGrads(grads, t1, t2, majorGrad, majorValue, minorValue, unitStart)
+    }
+
+    // Seconds
+    else if (units.seconds > 0) {
+      
+      t1 = second_start(rangeStart) - MINUTE_MS;
+      t2 = second_start(rangeEnd) + MINUTE_MS;
+
+      grads.unit = ["s", "second"];
+      grads.timeSpan = `${units.seconds} seconds`;
+
+      majorGrad = (ts) => { return SECOND_MS };
+        
+      unitStart = (ts) => { return second_start(ts) };
+
+      majorValue = (ts) => {
+        if (get_month(ts) == 0 && get_day(ts) == 1 && get_hour(ts) == 0 && get_minute(ts) == 0) return get_year(ts)
+        else if (get_day(ts) == 1 && get_hour(ts) == 0 && get_minute(ts) == 0) return get_monthName(ts)
+        else if (get_hour(ts) == 0 && get_minute(ts) == 0) return this.gradsDayName(ts)
+        else if (get_minute(ts) == 0 && get_second(ts) == 0) return this.HM(ts)
+        else return this.MS(ts)
+      };
+      minorValue = (ts) => { return this.MS(ts) };
+
+      return this.buildGrads(grads, t1, t2, majorGrad, majorValue, minorValue, unitStart)
+    }
+  }
+
+  buildGrads(grads, t1, t2, majorGrad ,majorValue, minorValue, unitStart) {
+    let th, to, min;
+    const minorGrad = Math.floor(this.rangeLength / this.gradsMax) * this.range.interval;
+
+    while (t1 < t2) {
+      to = t1;
+      grads.entries[t1] = [majorValue(t1), this.t2Pixel(t1), t1, "major"];
+
+      th = t1;
+      t1 += majorGrad(t1);
+
+      while ((t1 - to) < minorGrad) {
+        t1 += majorGrad(t1);
+      }
+
+      let x = Math.floor((t1 - to) / minorGrad);
+      if (x > 0 ) {
+        let y = Math.floor((t1 - to) / x);
+        while (th < t1) {
+          th += y;
+          min = unitStart(th);
+          grads.entries[min] = [minorValue(min), this.t2Pixel(min), min, "minor"];
+        }
+      }
+    }
+
+    grads.values = Object.values(grads.entries);
+
+    return grads
+  }
+
+  HM(t) {
+    let h = String(get_hour(t)).padStart(2, '0');
+    let m = String(get_minute(t)).padStart(2, '0');
+    return `${h}:${m}`
+  }
+
+  HMS(t) {
+    let h = String(get_hour(t)).padStart(2, '0');
+    let m = String(get_minute(t)).padStart(2, '0');
+    let s = String(get_second(t)).padStart(2, '0');
+    return `${h}:${m}:${s}`
+  }
+
+  MS(t) {
+    let m = String(get_minute(t)).padStart(2, '0');
+    let s = String(get_second(t)).padStart(2, '0');
+    return `${m}:${s}`
+  }
+
+  draw() {
+    this.#xAxisGrads = this.calcXAxisGrads();
+    this.drawGrads();
+    this.drawOverlays();
+  }
+
+  drawGrads() {
+    this.parent.layerLabels.scene.clear();
+
+    const grads = this.#xAxisGrads.values;
+    const ctx = this.parent.layerLabels.scene.context;
+    this.width / this.range.Length * 0.5;
+    const offset = 0;
+
+
+    ctx.save();
+    ctx.strokeStyle = XAxisStyle.COLOUR_TICK;
+    ctx.fillStyle = XAxisStyle.COLOUR_TICK;
+    ctx.font = XAxisStyle.FONT_LABEL;
+    for (let tick of grads) { 
+      // ctx.font = (tick[3] == "major") ? XAxisStyle.FONT_LABEL_BOLD : XAxisStyle.FONT_LABEL
+      let w = Math.floor(ctx.measureText(`${tick[0]}`).width * 0.5);
+      ctx.fillText(tick[0], tick[1] - w + offset, this.xAxisTicks + 12);
+
+      ctx.beginPath();
+      ctx.moveTo(tick[1] + offset, 0);
+      ctx.lineTo(tick[1] + offset, this.xAxisTicks);
+      ctx.stroke();
+    }
+      ctx.restore();
+  }
+
+  drawOverlays() {
+    this.parent.layerOverlays.scene.clear();
+
+    this.#xAxisGrads;
+  }
+
+}
+
+// canvas.js
+
+
+/**
+ * Create multi-layered canvas
+ * @class Viewport
+ */
+class Viewport {
+/**
+ * Viewport constructor
+ * @param {Object} cfg - {width, height}
+ */
+  constructor(cfg) {
+    if (!cfg) cfg = {};
+
+    this.container = cfg.container;
+    this.layers = [];
+    this.id = CEL.idCnt++;
+    this.scene = new CEL.Scene();
+
+    this.setSize(cfg.width || 0, cfg.height || 0);
+
+    // clear container
+    cfg.container.innerHTML = "";
+    cfg.container.appendChild(this.scene.canvas);
+
+    CEL.viewports.push(this);
+  }
+
+  /**
+   * set viewport size
+   * @param {Integer} width - viewport width in pixels
+   * @param {Integer} height - viewport height in pixels
+   * @returns {Viewport}
+   */
+  setSize(width, height) {
+    this.width = width;
+    this.height = height;
+    this.scene.setSize(width, height);
+
+    this.layers.forEach(function (layer) {
+      layer.setSize(width, height);
+    });
+
+    return this;
+  }
+  /**
+   * add layer
+   * @param {CEL.Layer} layer
+   * @returns {Viewport}
+   */
+  addLayer(layer) {
+    this.layers.push(layer);
+    layer.setSize(layer.width || this.width, layer.height || this.height);
+    layer.viewport = this;
+    return this;
+  }
+  /**
+   * get key's associated coordinate - applied to mouse events.
+   * @param {Number} x
+   * @param {Number} y
+   * @returns {Integer} integer - returns -1 if no pixel is there
+   */
+  getIntersection(x, y) {
+    var layers = this.layers,
+      len = layers.length,
+      n = len - 1,
+      layer,
+      key;
+
+    while (n >= 0) {
+      layer = layers[n];
+      key = layer.hit.getIntersection(x, y);
+      if (key >= 0) {
+        return key;
+      }
+      n--;
+    }
+
+    return -1;
+  }
+  /**
+   * get viewport index from all CEL viewports
+   * @returns {Integer}
+   */
+  getIndex() {
+    let viewports = CEL.viewports,
+      viewport,
+      n = 0;
+
+    for (viewport of viewports) {
+      if (this.id === viewport.id) return n;
+      n++;
+    }
+
+    return null;
+  }
+  /**
+   * destroy viewport
+   */
+  destroy() {
+    // remove layers
+    for (let layer of layers) {
+      layer.remove();
+    }
+
+    // clear dom
+    this.container.innerHTML = "";
+
+    // remove self from #viewports array
+    CEL.viewports.splice(this.getIndex(), 1);
+  }
+  /**
+   * composite all layers onto canvas
+   */
+  render() {
+    let scene = this.scene,
+      layers = this.layers,
+      layer;
+
+    scene.clear();
+
+    for (layer of layers) {
+      if (layer.visible)
+        scene.context.drawImage(
+          layer.scene.canvas,
+          layer.x,
+          layer.y,
+          layer.width,
+          layer.height
+        );
+    }
+  }
+}
+
+class Layer {
+  /**
+   * Layer constructor
+   * @param {Object} cfg - {x, y, width, height}
+   */
+  constructor(cfg) {
+    if (!cfg) cfg = {};
+
+    this.id = CEL.idCnt++;
+    this.x = 0;
+    this.y = 0;
+    this.width = 0;
+    this.height = 0;
+    this.visible = true;
+    this.hit = new CEL.Hit({
+      contextType: cfg.contextType,
+    });
+    this.scene = new CEL.Scene({
+      contextType: cfg.contextType,
+    });
+
+    if (cfg.x && cfg.y) {
+      this.setPosition(cfg.x, cfg.y);
+    }
+    if (cfg.width && cfg.height) {
+      this.setSize(cfg.width, cfg.height);
+    }
+  }
+
+  /**
+   * set layer position
+   * @param {Number} x
+   * @param {Number} y
+   * @returns {Layer}
+   */
+  setPosition(x, y) {
+    this.x = x;
+    this.y = y;
+    return this;
+  }
+  /**
+   * set layer size
+   * @param {Number} width
+   * @param {Number} height
+   * @returns {Layer}
+   */
+  setSize(width, height) {
+    this.width = width;
+    this.height = height;
+    this.scene.setSize(width, height);
+    this.hit.setSize(width, height);
+    return this;
+  }
+  /**
+   * move up
+   * @returns {Layer}
+   */
+  moveUp() {
+    let index = this.getIndex(),
+      viewport = this.viewport,
+      layers = viewport.layers;
+
+    if (index < layers.length - 1) {
+      // swap
+      layers[index] = layers[index + 1];
+      layers[index + 1] = this;
+    }
+
+    return this;
+  }
+  /**
+   * move down
+   * @returns {Layer}
+   */
+  moveDown() {
+    let index = this.getIndex(),
+      viewport = this.viewport,
+      layers = viewport.layers;
+
+    if (index > 0) {
+      // swap
+      layers[index] = layers[index - 1];
+      layers[index - 1] = this;
+    }
+
+    return this;
+  }
+  /**
+   * move to top
+   * @returns {Layer}
+   */
+  moveTop() {
+    let index = this.getIndex(),
+      viewport = this.viewport,
+      layers = viewport.layers;
+
+    layers.splice(index, 1);
+    layers.push(this);
+  }
+  /**
+   * move to bottom
+   * @returns {Layer}
+   */
+  moveBottom() {
+    let index = this.getIndex(),
+      viewport = this.viewport,
+      layers = viewport.layers;
+
+    layers.splice(index, 1);
+    layers.unshift(this);
+
+    return this;
+  }
+  /**
+   * get layer index from viewport layers
+   * @returns {Number|null}
+   */
+  getIndex() {
+    let layers = this.viewport.layers;
+      layers.length;
+      let n = 0,
+      layer;
+
+    for (layer of layers) {
+      if (this.id === layer.id) return n;
+      n++;
+    }
+
+    return null;
+  }
+  /**
+   * remove
+   */
+  remove() {
+    // remove this layer from layers array
+    this.viewport.layers.splice(this.getIndex(), 1);
+  }
+}
+
+class Scene {
+  /**
+   * Scene constructor
+   * @param {Object} cfg - {width, height}
+   */
+  constructor(cfg) {
+    if (!cfg) cfg = {};
+
+    this.id = CEL.idCnt++;
+
+    this.width = 0;
+    this.height = 0;
+    this.contextType = cfg.contextType || "2d";
+
+    this.canvas = document.createElement("canvas");
+    this.canvas.className = "scene-canvas";
+    this.canvas.style.display = "block";
+    this.context = this.canvas.getContext(this.contextType);
+
+    if (cfg.width && cfg.height) {
+      this.setSize(cfg.width, cfg.height);
+    }
+  }
+
+  /**
+   * set scene size
+   * @param {Number} width
+   * @param {Number} height
+   * @returns {Scene}
+   */
+  setSize(width, height) {
+    this.width = width;
+    this.height = height;
+    this.canvas.width = width * CEL.pixelRatio;
+    this.canvas.style.width = `${width}px`;
+    this.canvas.height = height * CEL.pixelRatio;
+    this.canvas.style.height = `${height}px`;
+
+    if (this.contextType === "2d" && CEL.pixelRatio !== 1) {
+      this.context.scale(CEL.pixelRatio, CEL.pixelRatio);
+    }
+
+    return this;
+  }
+  /**
+   * clear scene
+   * @returns {Scene}
+   */
+  clear() {
+    let context = this.context;
+    if (this.contextType === "2d") {
+      context.clearRect(
+        0,
+        0,
+        this.width * CEL.pixelRatio,
+        this.height * CEL.pixelRatio
+      );
+    }
+    // webgl or webgl2
+    else {
+      context.clear(context.COLOR_BUFFER_BIT | context.DEPTH_BUFFER_BIT);
+    }
+    return this;
+  }
+  /**
+   * convert scene into an image
+   * @param {String} type - type of image format
+   * @param {Number} quality - image quality 0 - 1
+   * @param {Function} cb - callback
+   */
+  toImage(type = "image/png", quality, cb) {
+    let that = this,
+      imageObj = new Image(),
+      dataURL = this.canvas.toDataURL(type, quality);
+
+    imageObj.onload = function () {
+      imageObj.width = that.width;
+      imageObj.height = that.height;
+      cb(imageObj);
+    };
+    imageObj.src = dataURL;
+  }
+  /**
+   * export scene as an image
+   * @param {Object} cfg - {filename}
+   * @param {Function} cb - optional, by default opens image in new window / tab
+   * @param {String} type - type of image format
+   * @param {Number} quality - image quality 0 - 1
+   */
+  export(cfg, cb, type = "image/png", quality) {
+    if (typeof cb !== "function") cb = this.blobCallback.bind({ cfg: cfg });
+    this.canvas.toBlob(cb, type, quality);
+  }
+
+  blobCallback(blob) {
+    let anchor = document.createElement("a"),
+      dataUrl = URL.createObjectURL(blob),
+      fileName = this.cfg.fileName || "canvas.png";
+
+    // set <a></a> attributes
+    anchor.setAttribute("href", dataUrl);
+    anchor.setAttribute("target", "_blank");
+    anchor.setAttribute("export", fileName);
+
+    // invoke click
+    if (document.createEvent) {
+      Object.assign(document.createElement("a"), {
+        href: dataUrl,
+        target: "_blank",
+        export: fileName,
+      }).click();
+    } else if (anchor.click) {
+      anchor.click();
+    }
+  }
+}
+
+class Hit {
+  /**
+   * Hit constructor
+   * @param {Object} cfg - {width, height}
+   */
+  constructor(cfg) {
+    if (!cfg) cfg = {};
+
+    this.width = 0;
+    this.height = 0;
+    this.contextType = cfg.contextType || "2d";
+    this.canvas = document.createElement("canvas");
+    this.canvas.className = "hit-canvas";
+    this.canvas.style.display = "none";
+    this.canvas.style.position = "relative";
+    this.context = this.canvas.getContext(this.contextType, {
+      // add preserveDrawingBuffer to pick colors with readPixels for hit detection
+      preserveDrawingBuffer: true,
+      // fix webgl antialiasing picking issue
+      antialias: false,
+    });
+
+    if (cfg.width && cfg.height) {
+      this.setSize(cfg.width, cfg.height);
+    }
+  }
+
+  /**
+   * set hit size
+   * @param {Number} width
+   * @param {Number} height
+   * @returns {Hit}
+   */
+  setSize(width, height) {
+    this.width = width;
+    this.height = height;
+    this.canvas.width = width * CEL.pixelRatio;
+    this.canvas.style.width = `${width}px`;
+    this.canvas.height = height * CEL.pixelRatio;
+    this.canvas.style.height = `${height}px`;
+    return this;
+  }
+  /**
+   * clear hit
+   * @returns {Hit}
+   */
+  clear() {
+    let context = this.context;
+    if (this.contextType === "2d") {
+      context.clearRect(
+        0,
+        0,
+        this.width * CEL.pixelRatio,
+        this.height * CEL.pixelRatio
+      );
+    }
+    // webgl or webgl2
+    else {
+      context.clear(context.COLOR_BUFFER_BIT | context.DEPTH_BUFFER_BIT);
+    }
+    return this;
+  }
+  /**
+   * get key associated with coordinate. This can be used for mouse interactivity.
+   * @param {Number} x
+   * @param {Number} y
+   * @returns {Integer} integer - returns -1 if no pixel is there
+   */
+  getIntersection(x, y) {
+    let context = this.context,
+      data;
+
+    x = Math.round(x);
+    y = Math.round(y);
+
+    // if x or y are out of bounds return -1
+    if (x < 0 || y < 0 || x > this.width || y > this.height) {
+      return -1;
+    }
+
+    // 2d
+    if (this.contextType === "2d") {
+      data = context.getImageData(x, y, 1, 1).data;
+
+      if (data[3] < 255) {
+        return -1;
+      }
+    }
+    // webgl
+    else {
+      data = new Uint8Array(4);
+      context.readPixels(
+        x * CEL.pixelRatio,
+        (this.height - y - 1) * CEL.pixelRatio,
+        1,
+        1,
+        context.RGBA,
+        context.UNSIGNED_BYTE,
+        data
+      );
+
+      if (data[0] === 255 && data[1] === 255 && data[2] === 255) {
+        return -1;
+      }
+    }
+
+    return this.rgbToInt(data);
+  }
+  /**
+   * get canvas formatted color string from data index
+   * @param {Number} index
+   * @returns {String}
+   */
+  getColorFromIndex(index) {
+    let rgb = this.intToRGB(index);
+    return "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")";
+  }
+  /**
+   * converts rgb array to integer value
+   * @param {Array} rgb - [r,g,b]
+   * @returns {number}
+   */
+  rgbToInt(rgb) {
+    let r = rgb[0];
+    let g = rgb[1];
+    let b = rgb[2];
+    return (r << 16) + (g << 8) + b;
+  }
+  /**
+   * converts integer value to rgb array
+   * @param {Number} number - positive number between 0 and 256*256*256 = 16,777,216
+   * @returns {Array}
+   */
+  intToRGB(number) {
+    let r = (number & 0xff0000) >> 16;
+    let g = (number & 0x00ff00) >> 8;
+    let b = number & 0x0000ff;
+    return [r, g, b];
+  }
+}
+
+// Canvas Extension Layers
+const CEL = {
+  idCnt: 0,
+  viewports: [],
+  pixelRatio: (window && window.devicePixelRatio) || 1,
+
+  Viewport: Viewport,
+  Layer: Layer,
+  Scene: Scene,
+  Hit: Hit,
+};
+
+const defaultOptions = {
+  fontSize: 12,
+  fontWeight: "normal",
+  fontFamily: 'Helvetica Neue',
+  paddingLeft: 3,
+  paddingRight: 3,
+  paddingTop: 2,
+  paddingBottom: 2,
+  borderSize: 0,
+  txtCol: "#000",
+  bakCol: "#CCC"
+};
+
+/**
+ * Measure the width of the text
+ * @param ctx
+ * @param text
+ * @returns {number}
+ */
+function calcTextWidth (ctx, text) {
+  return Math.round(ctx.measureText(text).width)
+}
+
+/**
+ * Create font
+ * @param fontSize
+ * @param fontFamily
+ * @param fontWeight
+ * @returns {string}
+ */
+function createFont (
+  fontSize = defaultOptions.fontSize, 
+  fontWeight = defaultOptions.fontWeight, 
+  fontFamily = defaultOptions.fontFamily
+  ) {
+  return `${fontWeight} ${fontSize}px ${fontFamily}`
+}
+
+/**
+ * Get the width of the text box
+ * @param ctx
+ * @param text
+ * @param options
+ * @returns {number}
+ */
+function getTextRectWidth (ctx, text, options) {
+  ctx.font = createFont(options.fontSize, options.fontWeight, options.fontFamily);
+  const textWidth = calcTextWidth(ctx, text);
+  const paddingLeft = options.paddingLeft || 0;
+  const paddingRight = options.paddingRight || 0;
+  const borderSize = options.borderSize || 0;
+  return paddingLeft + paddingRight + textWidth + (borderSize * 2)
+}
+
+/**
+ * Get the height of the text box
+ * @param options
+ * @returns {number}
+ */
+function getTextRectHeight (options) {
+  const paddingTop = options.paddingTop || 0;
+  const paddingBottom = options.paddingBottom || 0;
+  const borderSize = options.borderSize || 0;
+  const fontSize = options.fontSize || 0;
+  return paddingTop + paddingBottom + fontSize + (borderSize * 2)
+}
+
+/**
+ * draw text with background
+ * @export
+ * @param {canvas} ctx
+ * @param {string} txt
+ * @param {number} x
+ * @param {number} y
+ * @param {object} options - styling options
+ */
+function drawTextBG(ctx, txt, x, y, options) {
+
+  /// lets save current state as we make a lot of changes        
+  ctx.save();
+
+  ctx.font = createFont(options?.fontSize, options?.fontWeight, options?.fontFamily);
+  /// draw text from top - makes life easier at the moment
+  ctx.textBaseline = 'top';
+
+  /// color for background
+  ctx.fillStyle = options.bakCol || defaultOptions.bakCol;
+  
+  /// get width of text
+  let width = getTextRectWidth(ctx, txt, options);
+  let height = getTextRectHeight(options);
+
+  /// draw background rect
+  ctx.fillRect(x, y, width, height);
+
+  // draw text on top
+  ctx.fillStyle = options.txtCol || defaultOptions.txtCol;
+  x = x + options?.paddingLeft;
+  y = y + options?.paddingTop;
+  ctx.fillText(txt, x, y);
+  
+  /// restore original state
+  ctx.restore();
+}
+
 // state-chart.js
 
 var stateMachineConfig$5 = {
@@ -4296,118 +5162,118 @@ var stateMachineConfig$5 = {
   context: {},
   states: {
     idle: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         resize: {
           target: 'resize',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to  "resize"`)
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to  "resize"`)
           },
         },
         xAxis_scale: {
           target: 'scale',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to  "scale"`)
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to  "scale"`)
           },
         },
         xAxis_inc: {
           target: 'incremental',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to  "incremental"`)
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to  "incremental"`)
           },
         },
         xAxis_log: {
           target: 'logarithmic',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to  "logarithmic"`)
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to  "logarithmic"`)
           },
         },
         xAxis_100: {
           target: 'percentual',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to  "percentual"`)
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to  "percentual"`)
           },
         },
         chart_pan: {
           target: 'chart_pan',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to  "chart_pan"`)
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to  "chart_pan"`)
           },
         },
         chart_zoom: {
           target: 'chart_zoom',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to  "chart_zoom"`)
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to  "chart_zoom"`)
           },
         },
       }
     },
     resize: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         someEvent: {
           target: '',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('Time: transition action for event in "idle" state')
           },
         },
       }
     },
     chart_pan: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         chart_pan: {
           target: 'chart_pan',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "chart_pan"`)
-            // stateMachine.context.origin.draw()
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "chart_pan"`)
+            // this.context.origin.draw()
           },
         },
         chart_panDone: {
           target: 'idle',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "chart_panDone"`)
-            // stateMachine.context.origin.draw()
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "chart_panDone"`)
+            // this.context.origin.draw()
           },
         },
       }
     },
     chart_zoom: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         always: {
           target: 'idle',
           condition: 'zoomDone',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "chart_pan"`)
-            // stateMachine.context.origin.draw()
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "chart_pan"`)
+            // this.context.origin.draw()
           },
         },
       }
     },
   },
   guards: {
-    zoomDone: (context, event, { cond }) => { return true }
+    zoomDone () { return true },
   }
 };
 
@@ -4434,6 +5300,8 @@ class Timeline {
   #layerOverlays
   #layerCursor
 
+  #controller
+
   constructor (mediator, options) {
 
     this.#mediator = mediator;
@@ -4455,6 +5323,7 @@ class Timeline {
   get shortName() { return this.#shortName }
   get mediator() { return this.#mediator }
   get options() { return this.#options }
+  get core() { return this.#core }
   get height() { return this.#elTime.clientHeight }
   set width(w) { this.setWidth(w); }
   get width() { return this.#elTime.clientWidth }
@@ -4509,7 +5378,7 @@ class Timeline {
   }
 
   setDimensions(dim) {
-    const buffer = this.config.buffer || BUFFERSIZE;
+    const buffer = this.config.buffer || BUFFERSIZE$1;
     const width = dim.w - this.#core.Chart.scale.width;
     const height = this.height;
     const layerWidth = Math.round(width * ((100 + buffer) * 0.01));
@@ -4542,17 +5411,18 @@ class Timeline {
   }
 
   end() {
-    
+    this.#mediator.stateMachine.destroy();
+    this.#viewport.destroy();
+    this.#controller = null;
+    this.off("main_mousemove", this.drawCursorTime);
   }
 
   eventsListen() {
     let canvas = this.#viewport.scene.canvas;
     // create controller and use 'on' method to receive input events 
-    new InputController(canvas);
+    this.#controller = new InputController(canvas, {disableContextMenu: false});
 
     this.on("main_mousemove", (e) => { this.drawCursorTime(e); });
-    // this.on("chart_pan", (e) => { this.drawCursorTime(e, true) })
-    // this.on("chart_panDone", (e) => { this.drawCursorTime(e, true) })
   }
 
   on(topic, handler, context) {
@@ -4581,7 +5451,7 @@ class Timeline {
 
   createViewport() {
 
-    const buffer = this.config.buffer || BUFFERSIZE;
+    const buffer = this.config.buffer || BUFFERSIZE$1;
     const width = this.xAxisWidth;
     const height = this.#elTime.clientHeight;
     const layerConfig = { 
@@ -4661,25 +5531,30 @@ class Timeline {
 
 class yAxis extends Axis {
 
+  #source
   #parent
   #chart
 
   #yAxisType = YAXIS_TYPES[0]  // default, log, percent
   #yAxisPadding = 1.04
   #yAxisStep = YAXIS_STEP
+  #yAxisGrid = YAXIS_GRID
   #yAxisDigits = PRICEDIGITS$1
   #yAxisRound = 3
   #yAxisTicks = 3
   #yAxisGrads
 
   constructor(parent, chart, yAxisType=YAXIS_TYPES[0]) {
-    super();
+    super(parent, chart);
     this.#chart = chart;
-    this.#parent = parent; 
+    this.#parent = parent;
+    this.#source = parent.parent;
     this.yAxisType = yAxisType;
+    this.#yAxisGrid = (this.#parent.core.config?.yAxisGrid) ? 
+      this.#parent.core.config?.yAxisGrid : YAXIS_GRID;
   }
 
-  get chart() { return this.#chart } //this.#parent.mediator.api.core.Chart }
+  get chart() { return this.#chart }
   get data() { return this.chart.data }
   get range() { return this.#parent.mediator.api.core.range }
   get height() { return this.chart.height }
@@ -4771,47 +5646,85 @@ class yAxis extends Axis {
 
     switch (this.yAxisType) {
       case "percent":
-        this.#yAxisGrads = this.gradations(100, 0, false);
+        this.#yAxisGrads = this.gradations(100, 0, false, true);
         break;
       default:
-        this.#yAxisGrads = this.gradations(this.range.priceMax, this.range.priceMin);
+        let max = (this.range.priceMax > 0) ? this.range.priceMax : 1;
+        let min = (this.range.priceMin > 0) ? this.range.priceMin : 0;
+        this.#yAxisGrads = this.gradations(max, min);
         break;
     }
   }
 
-  gradations(max, min, decimals=true) {
-    const rangeMid = (max + min) * 0.5;
-    const midH = this.height * 0.5;
-    let digits = this.countDigits(rangeMid);
-    const scaleMid = this.niceValue(digits, decimals);
+  gradations(max, min, decimals=true, fixed=false) {
 
-    const scaleGrads = [[scaleMid, round(midH), digits]];
+      let digits;
+    const scaleGrads = [];
 
-    let grad = round(power(log10(midH), 2) - 1),
-        step$ = (max - scaleMid) / grad,
-        stepP = midH / grad,
-        upper = scaleMid + step$,
-        pos = midH - stepP,
-        nice, 
-        entry;
-    while (upper <= max) {
-      digits = this.countDigits(upper);
-      nice = this.niceValue(digits, decimals);
-      entry = [nice, round(pos), digits];
-      scaleGrads.unshift(entry);
-      upper += step$;
-      pos -= stepP;
+    if (fixed) {
+      const rangeMid = (max + min) * 0.5;
+      const midH = this.height * 0.5;
+      digits = this.countDigits(rangeMid);
+      const scaleMid = this.niceValue(digits, decimals);
+  
+      scaleGrads.push([scaleMid, round(midH), digits]);
+  
+      let grad = round(power(log10(midH), 2) - 1),
+          step$ = (max - scaleMid) / grad,
+          stepP = midH / grad,
+          upper = scaleMid + step$,
+          pos = midH - stepP,
+          nice, 
+          entry;
+      while (upper <= max) {
+        digits = this.countDigits(upper);
+        nice = this.niceValue(digits, decimals);
+        entry = [nice, round(pos), digits];
+        scaleGrads.unshift(entry);
+        upper += step$;
+        pos -= stepP;
+      }
+      let lower = scaleMid - step$;
+          pos = midH + stepP;
+      while (lower >= min) {
+        digits = this.countDigits(lower);
+        nice = this.niceValue(digits, decimals);
+        entry = [nice, round(pos), digits];
+        scaleGrads.push(entry);
+        lower -= step$;
+        pos += stepP;
+      }
     }
-    let lower = scaleMid - step$;
-        pos = midH + stepP;
-    while (lower >= min) {
-      digits = this.countDigits(lower);
-      nice = this.niceValue(digits, decimals);
-      entry = [nice, round(pos), digits];
-      scaleGrads.push(entry);
-      lower -= step$;
-      pos += stepP;
+    else {
+      // roughly divide the yRange into cells
+      let rangeH = (this.rangeH > 0) ? this.rangeH : 1;
+      let yGridSize = (rangeH)/this.#yAxisGrid;
+
+      // try to find a nice number to round to
+      let niceNumber = Math.pow( 10 , Math.ceil( Math.log10( yGridSize ) ) );
+      if ( yGridSize < 0.25 * niceNumber ) niceNumber = 0.25 * niceNumber;
+      else if ( yGridSize < 0.5 * niceNumber ) niceNumber = 0.5 * niceNumber;
+
+      // find next largest nice number above yStart
+      var yStartRoundNumber = Math.ceil( min/niceNumber ) * niceNumber;
+      // find next lowest nice number below yEnd
+      var yEndRoundNumber = Math.floor( max/niceNumber ) * niceNumber;
+
+      let pos = this.height,
+          step$ = (yEndRoundNumber - yStartRoundNumber) / niceNumber,
+          stepP = this.height / step$,
+          nice;
+
+      for ( var y = yStartRoundNumber ; y <= yEndRoundNumber ; y += niceNumber )
+      {
+        digits = this.countDigits(y);
+        nice = this.niceValue(digits, decimals);
+        scaleGrads.push([nice, round(pos), digits]);
+
+        pos -= stepP;
+      }
     }
+
     return scaleGrads
   }
 
@@ -4841,7 +5754,7 @@ class yAxis extends Axis {
         cnt2 = 4 - digits.integers;
 
     if (cnt < 1) {
-      let decimals = digits.decimals + cnt;
+      let decimals = limit(digits.decimals + cnt, 0, 100);
       value = Number.parseFloat(value).toFixed(decimals);
     }
     else if (cnt2 < 1) {
@@ -4902,123 +5815,247 @@ var stateMachineConfig$4 = {
   context: {},
   states: {
     idle: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         resize: {
           target: 'resize',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('transition action for "resize" in "idle" state')
           },
         },
         yAxis_scale: {
           target: 'scale',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('transition action for "yAxis_scale" in "idle" state')
           },
         },
         yAxis_inc: {
           target: 'incremental',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('transition action for "yAxis_inc" in "idle" state')
           },
         },
         yAxis_log: {
           target: 'logarithmic',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('transition action for "yAxis_log" in "idle" state')
           },
         },
         yAxis_100: {
           target: 'percentual',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('transition action for "yAxis_100" in "idle" state')
           },
         },
         chart_pan: {
           target: 'chart_pan',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('Scale: from "idle" to "chart_pan" state')
           },
         },
         chart_zoom: {
           target: 'chart_zoom',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to  "chart_zoom"`)
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to  "chart_zoom"`)
+          },
+        },
+        scale_drag: {
+          target: 'scale_drag',
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to  "chart_zoom"`)
           },
         },
       }
     },
     resize: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         someEvent: {
           target: '',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('transition action for event in "idle" state')
           },
         },
       }
     },
     chart_pan: {
-      onEnter(stateMachine, data) {
+      onEnter(data) {
         // console.log('Scale: chart_pan: onEnter')
       },
-      onExit(stateMachine, data) {
+      onExit(data) {
         // console.log('Scale: chart_pan: onExit')
       },
       on: {
         chart_pan: {
           target: 'chart_pan',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('Scale: transition action for "chart_panDone" in "chart_pan" state')
-            stateMachine.context.origin.draw();
+            this.context.origin.draw();
           },
         },
         chart_panDone: {
           target: 'idle',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('Scale: transition action for "chart_panDone" in "chart_pan" state')
-            stateMachine.context.origin.draw(); 
+            this.context.origin.draw(); 
           },
         },
       }
     },
     chart_zoom: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         always: {
           target: 'idle',
           condition: 'zoomDone',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "chart_zoom"`)
-            stateMachine.context.origin.draw();
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "chart_zoom"`)
+            this.context.origin.draw();
           },
         },
       }
     },
+    scale_drag: {
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
+      },
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
+      },
+      on: {
+        scale_drag: {
+          target: 'scale_drag',
+          action (data) {
+            console.log(`${this.id}: transition from "${this.state}" to "chart_pan"`);
+            this.context.origin.setScaleRange(data[5]); 
+          },
+        },
+        scale_dragDone: {
+          target: 'idle',
+          action (data) {
+            console.log(`${this.id}: transition from "${this.state}" to "chart_panDone"`);
+            this.context.origin.setScaleRange(data[5]); 
+          },
+        },
+      }
+    },
+
   },
   guards: {
-    zoomDone: (context, event, { cond }) => { return true }
+    zoomDone () { return true },
   }
 };
 
+// scale-priceLine.js
+
+
+class scalePriceLine {
+
+  #core
+  #config
+  #scale
+  #target
+  #viewport
+  #scene
+
+  constructor(target, scale, config) {
+    this.#target = target;
+    this.#viewport = target.viewport;
+    this.#scene = target.scene;
+    this.#config = config;
+    this.#scale = scale;
+    this.#core = scale.core;
+
+    this.start();
+  }
+
+  start() {
+    this.eventListeners();
+  }
+  end() {
+    this.off(STREAM_UPDATE, this.onStreamUpdate);
+  }
+
+  eventListeners() {
+    this.on(STREAM_UPDATE, (e) => { this.onStreamUpdate(e); });
+  }
+
+  on(topic, handler, context) {
+    this.#scale.on(topic, handler, context);
+  }
+
+  off(topic, handler) {
+    this.#scale.off(topic, handler);
+  }
+
+  emit(topic, data) {
+    this.#scale.emit(topic, data);
+  }
+
+  onStreamUpdate(e) {
+    this.draw(e);
+  }
+
+  draw(candle) {
+
+    let price = candle[4],
+        y = this.#scale.yPos(price),
+        nice = this.#scale.nicePrice(price),
+        options = {
+          fontSize: YAxisStyle.FONTSIZE * 1.05,
+          fontWeight: YAxisStyle.FONTWEIGHT,
+          fontFamily: YAxisStyle.FONTFAMILY,
+          txtCol: "#FFFFFF", //YAxisStyle.COLOUR_CURSOR,
+          bakCol: YAxisStyle.COLOUR_CURSOR_BG,
+          paddingTop: 2,
+          paddingBottom: 2,
+          paddingLeft: 3,
+          paddingRight: 3
+        },
+        
+    height = options.fontSize + options.paddingTop + options.paddingBottom,
+    yPos = y - (height * 0.5);
+
+    this.#scene.clear();
+    const ctx = this.#scene.context;
+    ctx.save();
+
+    // TODO: get candle colours from config / theme
+    if (candle[4] >= candle[1]) options.bakCol = CandleStyle.COLOUR_CANDLE_UP;
+    else options.bakCol = CandleStyle.COLOUR_CANDLE_DN;
+
+    ctx.fillStyle = options.bakCol;
+    ctx.fillRect(1, yPos, this.width, height);
+
+    drawTextBG(ctx, `${nice}`, 1, yPos , options);
+
+    ctx.restore();
+    this.#viewport.render();
+  }
+}
+
 // scale.js
 
+/**
+ * Provides the chart panes scale / yAxis
+ * @export
+ * @class ScaleBar
+ */
 class ScaleBar {
 
   #ID
@@ -5040,10 +6077,12 @@ class ScaleBar {
   #viewport
   #layerLabels
   #layerOverlays
+  #layerPriceLine
   #layerCursor
 
+  #controller
+  #priceLine
   #cursorPos
-
 
   constructor (mediator, options) {
 
@@ -5069,6 +6108,8 @@ class ScaleBar {
   get shortName() { return this.#shortName }
   get mediator() { return this.#mediator }
   get options() { return this.#options }
+  get core() { return this.#core }
+  get parent() { return this.#parent }
   set height(h) { this.setHeight(h); }
   get height() { return this.#elScale.clientHeight }
   get width() { return this.#elScale.clientWidth }
@@ -5084,6 +6125,10 @@ class ScaleBar {
   get dimensions() { return DOM.elementDimPos(this.#elScale) }
   get theme() { return this.#core.theme }
   get config() { return this.#core.config }
+  set scaleRange(r) { this.setScaleRange(r); }
+  set rangeMode(m) { this.core.range.mode = m; }
+  get rangeMode() { return this.core.range.mode }
+  set rangeYFactor(f) { this.core.range.yFactor = f; }
 
   init() {
     this.mount(this.#elScale);
@@ -5095,15 +6140,11 @@ class ScaleBar {
 
 
   start(data) {
-    this.emit("started",data);
-
     this.#yAxis = new yAxis(this, this, this.yAxisType);
-
     // prepare layered canvas
     this.createViewport();
     // draw the scale
     this.draw();
-
     // set up event listeners
     this.eventsListen();
 
@@ -5115,19 +6156,28 @@ class ScaleBar {
   }
 
   end() {
-    // this.off(`${this.#parent.ID}_mousemove`, (e) => { this.offMouseMove(e) })
-    // this.off(`${this.#parent.ID}_mouseout`, (e) => { this.offMouseMove(e) })
-    // this.off("chart_pan", (e) => { this.drawCursorPrice() })
-    // this.off("chart_panDone", (e) => { this.eraseCursorPrice() })
+    this.#mediator.stateMachine.destroy();
+    this.#controller = null;
+    this.#viewport.destroy();
+
+    this.#controller.removeEventListener("drag", this.onDrag);
+    this.#controller.removeEventListener("enddrag", this.onDragDone);
+
+    this.off(`${this.#parent.ID}_mousemove`, this.onMouseMove);
+    this.off(`${this.#parent.ID}_mouseout`, this.eraseCursorPrice);
+    this.off(STREAM_UPDATE, this.onStreamUpdate);
   }
 
   eventsListen() {
     let canvas = this.#viewport.scene.canvas;
     // create controller and use 'on' method to receive input events 
-    new InputController(canvas);
+    this.#controller = new InputController(canvas, {disableContextMenu: false});
+    this.#controller.on("drag", this.onDrag.bind(this));
+    this.#controller.on("enddrag", this.onDragDone.bind(this));
 
     this.on(`${this.#parent.ID}_mousemove`, (e) => { this.onMouseMove(e); });
     this.on(`${this.#parent.ID}_mouseout`, (e) => { this.eraseCursorPrice(); });
+    this.on(STREAM_UPDATE, (e) => { this.onStreamUpdate(e); });
     // this.on("chart_pan", (e) => { this.drawCursorPrice() })
     // this.on("chart_panDone", (e) => { this.drawCursorPrice() })
     // this.on("resizeChart", (dimensions) => this.onResize.bind(this))
@@ -5154,6 +6204,36 @@ class ScaleBar {
     this.drawCursorPrice();
   }
 
+  onDrag(e) {
+    this.#cursorPos = [
+      Math.floor(e.position.x), Math.floor(e.position.y),
+      e.dragstart.x, e.dragstart.y,
+      e.movement.x, e.movement.y
+    ];
+    const dragEvent = {
+      divider: this,
+      cursorPos: this.#cursorPos
+    };
+    this.emit("scale_drag", dragEvent);
+  }
+
+  onDragDone(e) {
+    this.#cursorPos = [
+      Math.floor(e.position.x), Math.floor(e.position.y),
+      e.dragstart.x, e.dragstart.y,
+      e.movement.x, e.movement.y
+    ];
+    const dragEvent = {
+      divider: this,
+      cursorPos: this.#cursorPos
+    };
+    this.emit("scale_dragDone", dragEvent);
+  }
+
+  onStreamUpdate(e) {
+
+  }
+
   mount(el) {
     el.innerHTML = this.defaultNode();
 
@@ -5174,6 +6254,11 @@ class ScaleBar {
 
     this.setHeight(dim.h);
     this.draw(undefined, true);
+  }
+
+  setScaleRange(r) {
+    this.rangeMode = "manual";
+    this.rangeYFactor = r * 0.001;
   }
 
   defaultNode() {
@@ -5200,12 +6285,7 @@ class ScaleBar {
   // create canvas layers with handling methods
   createViewport() {
 
-    const width = this.#elScale.clientWidth;
-    const height = this.#elScale.clientHeight;
-    const layerConfig = { 
-      width: width, 
-      height: height
-    };
+    const {layerConfig} = this.layerConfig();
 
     // create viewport
     this.#viewport = new CEL.Viewport({
@@ -5221,9 +6301,39 @@ class ScaleBar {
 
     // add layers
     this.#viewport
-          .addLayer(this.#layerLabels)
+          .addLayer(this.#layerLabels);
+    if (isObject(this.config.stream)) 
+          this.layerStream();
+    this.#viewport
           .addLayer(this.#layerOverlays)
           .addLayer(this.#layerCursor);
+  }
+
+  layerConfig() {
+    const width = this.#elScale.clientWidth;
+    const height = this.#elScale.clientHeight;
+    const layerConfig = { 
+      width: width, 
+      height: height
+    };
+    return {width, height, layerConfig}
+  }
+
+  layerStream() {
+    // if the layer and instance were no set, do it now
+    if (!this.#layerPriceLine) {
+      const {layerConfig} = this.layerConfig();
+      this.#layerPriceLine = new CEL.Layer(layerConfig);
+      this.#viewport.addLayer(this.#layerPriceLine);
+    }
+    if (!this.#priceLine) {
+      this.#priceLine =
+      new scalePriceLine(
+        this.#layerPriceLine,
+        this,
+        this.theme
+      );
+    }
   }
 
   draw() {
@@ -5293,15 +6403,30 @@ class Legends {
 
   #targetEl
   #list
+  #parent
+  #core
 
-  constructor(target) {
+  #controls = {
+    width: 20,
+    height: 20,
+    fill: "#aaa"
+  }
+  #controlsList
+
+  constructor(target, parent) {
     this.#targetEl = target;
     this.#list = {};
+    this.#parent = parent;
+    this.#core = parent.core;
 
     this.mount(target);
   }
 
   get list() { return this.#list }
+
+  onMouseClick() {
+
+  }
 
   mount(el) {
     // el.innerHTML = this.defaultNode()
@@ -5311,9 +6436,12 @@ class Legends {
   }
 
   buildLegend(o) {
-    const styleLegend = "margin: .5em 0 1em 1em; font-size: 12px;";
+    const styleLegend = `width: calc(100% - ${this.#core.scaleW}px - 1em); margin: .5em 0 1em 1em; font-size: 12px; text-align: left;`;
       let styleLegendTitle = "margin-right: 1em; white-space: nowrap;";
     const styleInputs = "display: inline; margin-left: -1em;";
+    const styleControls = "float: right; margin: 0.5em; opacity:0";
+    const mouseOver = "onmouseover='this.style.opacity=1'";
+    const mouseOut = "onmouseout='this.style.opacity=0'";
 
     styleLegendTitle += (o?.type === "chart")? "font-size: 1.5em;" : "font-size: 1.2em;";
 
@@ -5321,21 +6449,50 @@ class Legends {
       <div id="${o.id}" class="legend" style="${styleLegend}">
         <span class="title" style="${styleLegendTitle}">${o.title}</span>
         <dl style="${styleInputs}">${this.buildInputs(o)}</dl>
+        <div class="controls" style="${styleControls}" ${mouseOver} ${mouseOut}>${this.buildControls(o)}</div>
       </div>
     `;
     return node
   }
 
   buildInputs(o) {
-    let inp = "",
+    let i = 0,
+        inp = "",
         input,
         styleDT = "display: inline; margin-left: 1em;",
         styleDD = "display: inline; margin-left: .25em;";
     for (input in o.inputs) {
+      let colour = "";
+      if (o.colours?.[i]) colour = ` color: ${o.colours[i]};`;
       inp +=
       `<dt style="${styleDT}">${input}:</dt>
-      <dd style="${styleDD}">${o.inputs[input]}</dd>`;
+      <dd style="${styleDD}${colour}">${o.inputs[input]}</dd>`;
+      ++i;
     }
+    return inp
+  }
+
+  buildControls(o) {
+    let inp = "";
+    let id = this.#parent.ID;
+
+    // visibility
+    // move up
+    inp += `<span id="${id}_up" class="control">${up}</span>`;
+    // move down
+    inp += `<span id="${id}_down" class="control">${down}</span>`;
+    // collapse
+    inp += `<span id="${id}_collapse" class="control">${collapse}</span>`;
+    // maximize
+    inp += `<span id="${id}_maximize" class="control">${maximize}</span>`;
+    // restore
+    inp += `<span id="${id}_restore" class="control">${restore}</span>`;
+    // remove
+    inp += `<span id="${id}_remove" class="control">${close}</span>`;
+    // config
+    inp += `<span id="${id}_config" class="control">${config}</span>`;
+
+
     return inp
   }
 
@@ -5348,8 +6505,19 @@ class Legends {
     const html = this.buildLegend(options);
     const elem = DOM.htmlToElement(html);
 
-    this.#targetEl.appendChild(elem); 
-    this.#list[options.id] = {el: DOM.findByID(options.id), type: options.type};
+    this.#targetEl.appendChild(elem);
+    const legendEl = DOM.findByID(options.id);
+    this.#list[options.id] = {el: legendEl, type: options.type};
+
+    this.#controlsList = DOM.findBySelectorAll(`#${options.id} .controls .control`);
+    for (let c of this.#controlsList) {
+      let svg = c.querySelector('svg');
+      svg.style.width = `${this.#controls.width}px`;
+      svg.style.height = `${this.#controls.height}px`;
+      svg.style.fill = `${this.#controls.fill}`;
+
+      c.addEventListener('click', this.onMouseClick.bind(this));
+    }
 
     return options.id
   }
@@ -5360,6 +6528,11 @@ class Legends {
     
     this.#list[id].el.remove();
     delete this.#list[id];
+
+    for (let c of this.#controlsList) {
+      c.removeEventListener('click', this.onMouseClick);
+    }
+    
 
     return true
   }
@@ -5393,7 +6566,7 @@ class chartGrid {
     this.#config = config;
     this.#xAxis = xAxis;
     this.#yAxis = yAxis;
-    this.#core = xAxis.mediator.api.core;
+    this.#core = xAxis.core;
     this.#config.axes = config.axes || "both";
   }
 
@@ -5679,7 +6852,6 @@ class Candle {
 
 // chart-candles.js
 
-
 class chartCandles extends Candle {
 
   #target
@@ -5722,6 +6894,10 @@ class chartCandles extends Candle {
 
     while(i) {
       x = range.value( c );
+      if (x?.[7]) {
+        this.#core.stream.lastXPos = candle.x;
+        break
+      }
       if (x[4] !== null) {
         candle.o = this.#yAxis.yPos(x[1]);
         candle.h = this.#yAxis.yPos(x[2]);
@@ -5737,6 +6913,73 @@ class chartCandles extends Candle {
     }
 
     if (this.#config.CandleType === "AREA") super.areaRender();
+  }
+
+}
+
+// chart-streamCandle.js
+
+class chartStreamCandle extends Candle {
+
+  #target
+  #scene
+  #config
+  #xAxis
+  #yAxis
+  #core
+
+  constructor(target, xAxis, yAxis, config) {
+
+    super(target.scene, config);
+
+    this.#target = target;
+    this.#scene = target.scene;
+    this.#config = config;
+    this.#xAxis = xAxis;
+    this.#yAxis = yAxis;
+    this.#core = xAxis.mediator.api.core;
+    this.#config.priceLineStyle = this.#config?.priceLineStyle || PriceLineStyle;
+  }
+
+  get target() { return this.#target }
+
+  draw(stream) {
+    this.#scene.clear();
+
+    const r = this.#core.range;
+    const render = (this.#config.CandleType === "AREA") ?
+      (candle) => {} :
+      (candle) => {super.draw(candle);};
+    this.#xAxis.smoothScrollOffset || 0;
+    const pos = this.#core.stream.lastXPos;
+    const candle = {
+      x: pos, // offset + pos,
+      w: this.#xAxis.candleW
+    };
+    candle.o = this.#yAxis.yPos(stream[1]);
+    candle.h = this.#yAxis.yPos(stream[2]);
+    candle.l = this.#yAxis.yPos(stream[3]);
+    candle.c = this.#yAxis.yPos(stream[4]);
+    candle.raw = stream;
+
+    if (r.inRange(stream[0])) {
+      render(candle);
+
+      if (this.#config.CandleType === "AREA") super.areaRender();
+    }
+
+
+    if (stream[4] >= stream[1]) this.#config.priceLineStyle.strokeStyle = CandleStyle.COLOUR_CANDLE_UP;
+    else this.#config.priceLineStyle.strokeStyle = CandleStyle.COLOUR_CANDLE_DN;
+
+    // draw price line 
+    renderHorizontalLine (
+      this.#scene.context, 
+      candle.c, 
+      0, 
+      this.#target.width, 
+      this.#config.priceLineStyle
+    );
   }
 
 }
@@ -5823,104 +7066,137 @@ var stateMachineConfig$3 = {
   context: {},
   states: {
     idle: {
-      onEnter(stateMachine, data) {
-        stateMachine.context.origin.setCursor("crosshair");
+      onEnter (data) {
+        this.context.origin.setCursor("crosshair");
 
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         chart_pan: {
           target: 'chart_pan',
-          action: (stateMachine, data) => {
-            stateMachine.context.origin.setCursor("grab");
+          action (data) {
+            this.context.origin.setCursor("grab");
 
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to  "chart_pan"`)
+            // console.log(`${this.id}: transition from "${this.state}" to  "chart_pan"`)
           },
         },
         chart_tool: {
           target: 'chart_tool',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "chart_tool"`)
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "chart_tool"`)
           },
         },
         chart_zoom: {
           target: 'chart_zoom',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to  "chart_zoom"`)
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to  "chart_zoom"`)
           },
         },
         xAxis_scale: {
           target: 'xAxis_scale',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to  "xAxis_scale"`)
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to  "xAxis_scale"`)
+          },
+        },
+        tool_activated: {
+          target: 'tool_activated',
+          action (data) {
+            this.context.origin.setCursor("default");
+
+            // console.log(`${this.id}: transition from "${this.state}" to  "xAxis_scale"`)
           },
         },
       }
     },
     chart_pan: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         chart_pan: {
           target: 'chart_pan',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "chart_pan"`)
-            stateMachine.context.origin.updateRange(data); 
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "chart_pan"`)
+            this.context.origin.updateRange(data); 
           },
         },
         chart_panDone: {
           target: 'idle',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "chart_panDone"`)
-            stateMachine.context.origin.updateRange(data); 
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "chart_panDone"`)
+            this.context.origin.updateRange(data); 
           },
         },
       }
     },
     chart_zoom: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         always: {
           target: 'idle',
           condition: 'zoomDone',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "idle"`)
-            stateMachine.context.origin.zoomRange(data); 
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "idle"`)
+            this.context.origin.zoomRange(data); 
           },
         },
       }
     },
     xAxis_scale: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         Idle: {
           target: 'idle',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "onIdle"`)
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "onIdle"`)
+          },
+        },
+      }
+    },
+    tool_activated: {
+      onEnter (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
+      },
+      onExit (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
+      },
+      on: {
+        tool_targetSelected: {
+          target: 'idle',
+          condition: 'toolSelectedThis',
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "onIdle"`)
+            console.log("tool_targetSelected:", data);
           },
         },
       }
     },
   },
+
   guards: {
-    zoomDone: (context, event, { cond }) => { return true }
+    zoomDone () { return true },
+    toolSelectedThis (conditionType, condition) { 
+      if (this.eventData === this.context.origin)
+        return true
+      else
+        return false
+     },
   }
 };
 
@@ -5928,6 +7204,7 @@ var stateMachineConfig$3 = {
 
 const STYLE_CHART = ""; // "position: absolute; top: 0; left: 0; border: 1px solid; border-top: none; border-bottom: none;"
 const STYLE_SCALE$2 = "position: absolute; top: 0; right: 0; border-left: 1px solid;";
+const STYLE_SCALE2$1 = "top: 0; right: 0; border-left: 1px solid;";
 class Chart {
 
   #name = "Chart"
@@ -5946,6 +7223,7 @@ class Chart {
   #Time
   #Legends
   #onChart
+  #Stream
 
   #chartXPadding = 5
   #chartYPadding = 2.5
@@ -5955,24 +7233,28 @@ class Chart {
   #volumePrecision
 
   #viewport
-  #editport
   #layerGrid
   #layerVolume
   #layerCandles
+  #layerStream
   #layerCursor
   #layersOnChart
+  #layersTools = new Map()
   
   #chartGrid
   #chartVolume
-  #chartIndicators
+  #chartIndicators = new Map()
   #chartCandles
+  #chartStreamCandle
+  #chartTools = new Map()
   #chartCursor
 
   #cursorPos = [0, 0]
   #cursorActive = false
+  #cursorClick
 
   #settings
-  #chartCandle
+  #streamCandle
   #title
   #theme
   #controller
@@ -5982,6 +7264,7 @@ class Chart {
 
     this.#mediator = mediator;
     this.#elChart = mediator.api.elements.elChart;
+    this.#elScale = mediator.api.elements.elChartScale;
     this.#parent = {...this.#mediator.api.parent};
     this.#core = this.#mediator.api.core;
     this.#onChart = this.#mediator.api.onChart;
@@ -6002,6 +7285,7 @@ class Chart {
   get mediator() { return this.#mediator }
   get options() { return this.#options }
   get element() { return this.#elChart }
+  get core() { return this.#core }
   get scale() { return this.#Scale }
   get elScale() { return this.#elScale }
   set width(w) { this.setWidth(w); }
@@ -6010,15 +7294,18 @@ class Chart {
   get height() { return this.#elChart.clientHeight }
   get pos() { return this.dimensions }
   get dimensions() { return DOM.elementDimPos(this.#elChart) }
+  get stateMachine() { return this.#mediator.stateMachine }
   set state(s) { this.#core.setState(s); }
   get state() { return this.#core.getState() }
   get data() { return this.#core.chartData }
   get range() { return this.#core.range }
+  get stream() { return this.#Stream }
   get onChart() { return this.#onChart }
   set priceDigits(digits) { this.setYAxisDigits(digits); }
   get priceDigits() { return this.#yAxisDigits || PRICEDIGITS }
   get cursorPos() { return this.#cursorPos }
   get cursorActive() { return this.#cursorActive }
+  get cursorClick() { return this.#cursorClick }
   get candleW() { return this.#core.Timeline.candleW }
   get theme() { return this.#core.theme }
   get config() { return this.#core.config }
@@ -6045,7 +7332,7 @@ class Chart {
       title: this.#title,
       type: "chart"
     };
-    this.#Legends = new Legends(this.#elLegends);
+    this.#Legends = new Legends(this.#elLegends, this);
     this.#Legends.add(chartLegend);
 
     // api - functions / methods, calculated properties provided by this module
@@ -6055,8 +7342,6 @@ class Chart {
     api.elements = 
     {...api.elements, 
       ...{
-        // elWidgets: this.#elWidgets,
-        // elCanvas: this.#elCanvas,
         elScale: this.#elScale
       }
     };
@@ -6067,16 +7352,8 @@ class Chart {
     options.yAxisType = "default";
     this.#Scale = this.#mediator.register("Chart_ScaleBar", ScaleBar, options, api);
 
-
-    window.tradex_chart_scale = this.#Scale;
     // onChart indicators
     // this.#onChart = this.#mediator.register("OnChart", OnChart, options, api)
-
-
-    // set up layout responsiveness
-    // let dimensions = {wdith: this.#width, height: this.#height}
-    // this.emit("resizeChart", dimensions)
-
 
     this.log(`${this.#name} instantiated`);
   }
@@ -6086,9 +7363,11 @@ class Chart {
 
     // X Axis - Timeline
     this.#Time = this.mediator.api.Timeline;
+    if (isObject(this.Stream)) {
+      ({stream: this.Stream});
+      // iterate over on chart indicators and add inputs if any
+    }
 
-    // Y Axis - Price Scale
-    this.#Scale.on("started",(data)=>{this.log(`Chart scale started: ${data}`);});
     this.#Scale.start(`Chart says to Scale, "Thanks for the update!"`);
 
     // prepare layered canvas
@@ -6109,9 +7388,15 @@ class Chart {
   }
 
   end() {
+    this.#mediator.stateMachine.destroy();
+    this.#Scale.end();
+    this.#viewport.destroy();
+
     this.#controller.removeEventListener("mousemove", this.onMouseMove);
     this.#controller.removeEventListener("mouseenter", this.onMouseEnter);
     this.#controller.removeEventListener("mouseout", this.onMouseOut);
+    this.#controller.removeEventListener("mousedown", this.onMouseDown);
+    this.#controller = null;
 
     this.off("main_mousemove", this.onMouseMove);
   }
@@ -6119,16 +7404,18 @@ class Chart {
 
   eventsListen() {
     // create controller and use 'on' method to receive input events 
-    this.#controller = new InputController(this.#elCanvas);
-    // move event
+    this.#controller = new InputController(this.#elCanvas, {disableContextMenu: false});
     this.#controller.on("mousemove", this.onMouseMove.bind(this));
-    // enter event
     this.#controller.on("mouseenter", this.onMouseEnter.bind(this));
-    // out event
     this.#controller.on("mouseout", this.onMouseOut.bind(this));
+    this.#controller.on("mousedown", this.onMouseDown.bind(this));
 
     // listen/subscribe/watch for parent notifications
     this.on("main_mousemove", (pos) => this.updateLegends(pos));
+    this.on(STREAM_LISTENING, (stream) => this.onStreamListening(stream));
+    this.on(STREAM_NEWVALUE, (candle) => this.onStreamNewValue(candle));
+    this.on(STREAM_UPDATE, (candle) => this.onStreamUpdate(candle));
+    this.on("chart_yAxisRedraw", this.onYAxisRedraw.bind(this));
   }
 
   on(topic, handler, context) {
@@ -6158,11 +7445,8 @@ class Chart {
   }
   
   onMouseMove(e) {
-    // this.#cursorPos = [e.layerX, e.layerY]
     this.#cursorPos = [Math.floor(e.position.x), Math.floor(e.position.y)];
-
     this.emit("chart_mousemove", this.#cursorPos);
-
     this.updateLegends();
   }
 
@@ -6178,6 +7462,38 @@ class Chart {
     this.emit(`${this.ID}_mouseout`, this.#cursorPos);
   }
 
+  onMouseDown(e) {
+    this.#cursorClick = [Math.floor(e.position.x), Math.floor(e.position.y)];
+    if (this.stateMachine.state === "tool_activated") this.emit("tool_targetSelected", {target: this, position: e});
+  }
+
+  onStreamListening(stream) {
+    if (this.#Stream !== stream) {
+      this.#Stream = stream;
+      if (this.#layerStream === undefined) this.layerStream();
+    }
+  }
+
+  onStreamNewValue(candle) {
+    // this.#chartStreamCandle.draw(candle)
+    // this.#viewport.render()
+    this.draw(this.range, true);
+  }
+
+  onStreamUpdate(candle) {
+    this.#streamCandle = candle;
+    this.#layerStream.setPosition(this.#core.stream.lastScrollPos, 0);
+    this.#chartStreamCandle.draw(candle);
+    this.#viewport.render();
+
+    this.updateLegends(this.#cursorPos, candle);
+  }
+
+  onYAxisRedraw() {
+    this.#Scale.draw();
+    this.draw(this.range, true);
+  }
+
   mount(el) {
     el.innerHTML = this.defaultNode();
 
@@ -6185,7 +7501,8 @@ class Chart {
     // this.#elWidgets = DOM.findBySelector(`#${api.id} .${CLASS_WIDGETS}`)
     this.#elViewport = DOM.findBySelector(`#${api.id} .${CLASS_CHART} .viewport`);
     this.#elLegends = DOM.findBySelector(`#${api.id} .${CLASS_CHART} .legends`);
-    this.#elScale = DOM.findBySelector(`#${api.id} .${CLASS_CHART} .${CLASS_SCALE}`);
+    // this.#elScale = DOM.findBySelector(`#${api.id} .${CLASS_CHART} .${CLASS_SCALE}`)
+    // this.#elScale  = DOM.findBySelector(`#${api.id} .${CLASS_YAXIS} .${CLASS_CHART} .${CLASS_ROW}`)
   }
 
   props() {
@@ -6214,7 +7531,7 @@ class Chart {
   }
 
   setDimensions(dim) {
-    const buffer = this.config.buffer || BUFFERSIZE;
+    const buffer = this.config.buffer || BUFFERSIZE$1;
     const width = dim.w - this.#elScale.clientWidth;
     const height = dim.h;
     const layerWidth = Math.round(width * ((100 + buffer) * 0.01));
@@ -6225,6 +7542,7 @@ class Chart {
     // TODO: iterate layersOnChart and setSize()
     // this.#layersOnChart.setSize(layerWidth, height)
     this.#layerCandles.setSize(layerWidth, height);
+    this.#layerStream.setSize(layerWidth, height);
     this.#layerCursor.setSize(width, height);
 
     this.setWidth(dim.w);
@@ -6257,13 +7575,14 @@ class Chart {
 
     const styleChart = STYLE_CHART + ` width: ${width}px; height: ${height}px`;
     const styleScale = STYLE_SCALE$2 + ` width: ${api.scaleW - 1}px; height: ${height}px; border-color: ${api.chartBorderColour};`;
-    const styleLegend = `position: absolute; top: 0; left: 0; z-index:100;`;
+    const styleLegend = `width: 100%; position: absolute; top: 0; left: 0; z-index:100;`;
 
     const node = `
       <div class="viewport" style="${styleChart}"></div>
       <div class="legends" style="${styleLegend}"></div>
       <div class="${CLASS_SCALE}" style="${styleScale}"></div>
     `;
+    this.#elScale.style.cssText = STYLE_SCALE2$1 + ` width: ${api.scaleW - 1}px; height: ${height}px; border-color: ${api.chartBorderColour};`;
     return node
   }
 
@@ -6282,13 +7601,7 @@ class Chart {
 
   createViewport() {
 
-    const buffer = this.config.buffer || BUFFERSIZE;
-    const width = this.#elViewport.clientWidth;
-    const height = this.#options.chartH || this.#parent.rowsH - 1;
-    const layerConfig = { 
-      width: Math.round(width * ((100 + buffer) * 0.01)), 
-      height: height
-    };
+    const {width, height, layerConfig} = this.layerConfig();
 
     // create viewport
     this.#viewport = new CEL.Viewport({
@@ -6301,8 +7614,8 @@ class Chart {
     // create layers - grid, volume, candles
     this.#layerGrid = new CEL.Layer(layerConfig);
     this.#layerVolume = new CEL.Layer(layerConfig);
-    this.#layersOnChart = this.layersOnChart(layerConfig);
     this.#layerCandles = new CEL.Layer(layerConfig);
+    this.#layersOnChart = this.layersOnChart(layerConfig);
     this.#layerCursor = new CEL.Layer();
 
     // add layers
@@ -6313,7 +7626,12 @@ class Chart {
     this.addLayersOnChart();
 
     this.#viewport
-          .addLayer(this.#layerCandles)
+          .addLayer(this.#layerCandles);
+
+    if (isObject(this.config.stream)) 
+      this.addLayerStream();
+
+    this.#viewport
           .addLayer(this.#layerCursor);
 
     // add overlays
@@ -6325,14 +7643,22 @@ class Chart {
       this.#Scale, 
       this.#theme);
 
+    // this.#chartIndicators = this.chartIndicators()
+    
+    if (isObject(this.config.stream))
+      this.#chartStreamCandle = 
+        new chartStreamCandle(
+          this.#layerStream, 
+          this.#Time, 
+          this.#Scale, 
+          this.#theme);
+
     this.#chartCandles = 
       new chartCandles(
         this.#layerCandles, 
         this.#Time, 
         this.#Scale, 
         this.#theme);
-
-    // this.#chartIndicators = this.chartIndicators()
 
     this.#theme.maxVolumeH = this.#theme?.onchartVolumeH || VolumeStyle.ONCHART_VOLUME_HEIGHT;
     this.#chartVolume =
@@ -6350,11 +7676,23 @@ class Chart {
         this.#theme);
   }
 
+  layerConfig() {
+    const buffer = this.config.buffer || BUFFERSIZE$1;
+    const width = this.#elViewport.clientWidth;
+    const height = this.#options.chartH || this.#parent.rowsH - 1;
+    const layerConfig = { 
+      width: Math.round(width * ((100 + buffer) * 0.01)), 
+      height: height
+    };
+    return {width, height, layerConfig}
+  }
+
   layersOnChart() {
     let l = [];
+    let { layerConfig } = this.layerConfig();
 
     for (let i = 0; i < this.#onChart.length; i++) {
-      l[i] = new CEL.Layer();
+      l[i] = new CEL.Layer(layerConfig);
     }
     return l
   }
@@ -6378,10 +7716,76 @@ class Chart {
     return indicators
   }
 
+  layersTools() {
+
+  }
+
+  addTool(tool) {
+    let { layerConfig } = this.layerConfig();
+    let layer = new CEL.Layer(layerConfig);
+    this.#layersTools.set(tool.id, layer);
+    this.#viewport.addLayer(layer);
+
+    tool.layerTool = layer;
+    this.#chartTools.set(tool.id, tool);
+  }
+
+  addTools(tools) {
+
+  }
+
+  chartTools() {
+    // for (let i = 0; i < this.#layersTools.length; i++) {
+      // tools[i] = 
+        // new indicator(
+        //   this.#layersOnChart[i], 
+        //   this.#Time,
+        //   this.#Scale,
+        //   this.config)
+    // } 
+    // return tools
+  }
+
+  chartToolAdd(tool) {
+    // create new tool layer
+
+    this.#chartTools.set(tool.id, tool);
+  }
+
+  chartToolDelete(tool) {
+    this.#chartTools.delete(tool);
+  }
+
+  layerStream() {
+    // if the layer and instance were no set from chart config, do it now
+    this.addLayerStream();
+
+    if (!this.#chartStreamCandle) {
+      this.#chartStreamCandle = 
+      new chartStreamCandle(
+        this.#layerStream, 
+        this.#Time, 
+        this.#Scale, 
+        this.#theme);
+    }
+  }
+
+  addLayerStream() {
+    if (!this.#layerStream) {
+      const {width, height, layerConfig} = this.layerConfig();
+      this.#layerStream = new CEL.Layer(layerConfig);
+      this.#viewport.addLayer(this.#layerStream);
+    }
+  }
+
   draw(range=this.range, update=false) {
     this.#layerGrid.setPosition(this.#core.scrollPos, 0);
     this.#layerVolume.setPosition(this.#core.scrollPos, 0);
     this.#layerCandles.setPosition(this.#core.scrollPos, 0);
+    if (this.#layerStream) {
+      this.#layerStream.setPosition(this.#core.scrollPos, 0);
+      this.#core.stream.lastScrollPos = this.#core.scrollPos;
+    }
 
     if (this.scrollPos == this.bufferPx * -1 || 
         this.scrollPos == 0 || 
@@ -6391,8 +7795,19 @@ class Chart {
       this.#chartVolume.draw(range);
       this.#chartCandles.draw(range);
     }
+    if (this.#layerStream && this.#streamCandle) 
+      this.#chartStreamCandle.draw(this.#streamCandle);
 
     this.#viewport.render();
+  }
+
+  drawStream(candle) {
+
+  }
+  
+  refresh() {
+    this.#Scale.draw();
+    this.draw(this.range, true);
   }
 
   time2XPos(time) {
@@ -6427,30 +7842,35 @@ class Chart {
     this.#volumePrecision = volumePrecision;
   }
 
-  updateLegends(pos=this.#cursorPos) {
+  updateLegends(pos=this.#cursorPos, candle=false) {
+
     const legends = this.#Legends.list;
-    const ohlcv = this.#Time.xPosOHLCV(pos[0]);
     const inputs = {};
-          inputs.O = this.#Scale.nicePrice(ohlcv[1]);
-          inputs.H = this.#Scale.nicePrice(ohlcv[2]);
-          inputs.L = this.#Scale.nicePrice(ohlcv[3]);
-          inputs.C = this.#Scale.nicePrice(ohlcv[4]);
-          inputs.V = this.#Scale.nicePrice(ohlcv[5]);
+      let ohlcv = this.#Time.xPosOHLCV(pos[0]);
+      let colours = [];
+
+    if (this.#Stream && ohlcv[4] === null) ohlcv = candle;
+
+    // TODO: get candle colours from config / theme
+    if (ohlcv[4] >= ohlcv[1]) colours = new Array(5).fill(CandleStyle.COLOUR_WICK_UP);
+    else colours = new Array(5).fill(CandleStyle.COLOUR_WICK_DN);
+
+    inputs.O = this.#Scale.nicePrice(ohlcv[1]);
+    inputs.H = this.#Scale.nicePrice(ohlcv[2]);
+    inputs.L = this.#Scale.nicePrice(ohlcv[3]);
+    inputs.C = this.#Scale.nicePrice(ohlcv[4]);
+    inputs.V = this.#Scale.nicePrice(ohlcv[5]);
 
     for (const legend in legends) {
-      this.#Legends.update(legend, {inputs: inputs});
+      this.#Legends.update(legend, {inputs: inputs, colours: colours});
     }
   }
 
   /**
    * Calculate new range index / position 
    * @param {array} pos - [x2, y2, x1, y1, xdelta, ydelta]
-   * @returns 
    */
   updateRange(pos) {
-
-    this.#core.updateRange(pos);
-
     // draw the chart - grid, candles, volume
     this.draw(this.range);
   }
@@ -6483,149 +7903,181 @@ var stateMachineConfig$2 = {
   context: {},
   states: {
     idle: {
-      onEnter(stateMachine, data) {
-        stateMachine.context.origin.setCursor("crosshair");
+      onEnter(data) {
+        this.context.origin.setCursor("crosshair");
 
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         chart_pan: {
           target: 'chart_pan',
-          action: (stateMachine, data) => {
-            stateMachine.context.origin.setCursor("grab");
+          action (data) {
+            this.context.origin.setCursor("grab");
 
             // console.log('transition action for "chart_pan" in "idle" state')
           },
         },
         chart_zoom: {
           target: 'chart_zoom',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to  "chart_zoom"`)
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to  "chart_zoom"`)
           },
         },
         chart_tool: {
           target: 'chart_tool',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('transition action for "chart_tool" in "idle" state')
           },
         },
         xAxis_scale: {
           target: 'xAxis_scale',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('transition action for "xAxis_scale" in "idle" state')
           },
         },
         offChart_mouseDown: {
           target: 'offChart_mouseDown',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('transition action for "xAxis_scale" in "idle" state')
           },
         },
         offChart_mouseUp: {
           target: 'offChart_mouseUp',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('transition action for "xAxis_scale" in "idle" state')
+          },
+        },
+        tool_activated: {
+          target: 'tool_activated',
+          action (data) {
+            this.context.origin.setCursor("default");
+
+            // console.log(`${this.id}: transition from "${this.state}" to  "xAxis_scale"`)
           },
         },
       }
     },
     chart_pan: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         chart_pan: {
           target: 'chart_pan',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('offChart action for "chart_panDone" in "chart_pan" state')
-            stateMachine.context.origin.updateRange(data); 
+            this.context.origin.updateRange(data); 
           },
         },
         chart_panDone: {
           target: 'idle',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('offChart action for "chart_panDone" in "chart_pan" state')
-            stateMachine.context.origin.updateRange(data); 
+            this.context.origin.updateRange(data); 
           },
         },
       }
     },
     chart_zoom: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: - onExit (${stateMachine.event})`)
+      onExit(data) {
+        // console.log(`${this.id}: state: - onExit (${this.event})`)
       },
       on: {
         always: {
           target: 'idle',
           condition: 'zoomDone',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "chart_zoom"`)
-            stateMachine.context.origin.range;
-            stateMachine.context.origin.zoomRange();
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "chart_zoom"`)
+            this.context.origin.range;
+            this.context.origin.zoomRange();
           },
         },
       }
     },
     xAxis_scale: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         Idle: {
           target: 'idle',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('transition action for "onIdle" in "XScale" state')
           },
         },
       }
     },
     offChart_mouseDown: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         Idle: {
           target: 'idle',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('transition action for "onIdle" in "XScale" state')
           },
         },
       }
     },
     offChart_mouseUp: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         Idle: {
           target: 'idle',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('transition action for "onIdle" in "XScale" state')
+          },
+        },
+      }
+    },
+    tool_activated: {
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
+      },
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
+      },
+      on: {
+        tool_targetSelected: {
+          target: 'idle',
+          condition: 'toolSelectedThis',
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "onIdle"`)
+            console.log("tool_targetSelected:", data);
           },
         },
       }
     },
   },
   guards: {
-    zoomDone: (context, event, { cond }) => { return true }
+    zoomDone () { return true },
+    toolSelectedThis (conditionType, condition) { 
+      if (this.eventData === this.context.origin)
+        return true
+      else
+        return false
+     },
   }
 };
 
@@ -6633,6 +8085,7 @@ var stateMachineConfig$2 = {
 
 const STYLE_OFFCHART = ""; // "position: absolute; top: 0; left: 0; border: 1px solid; border-top: none; border-bottom: none;"
 const STYLE_SCALE$1 = "position: absolute; top: 0; right: 0; border-left: 1px solid;";
+const STYLE_SCALE2 = "top: 0; right: 0; border-left: 1px solid;";
 
 class OffChart {
 
@@ -6656,22 +8109,26 @@ class OffChart {
   #overlay
   #offChartID
   #Divider
+  #Stream
 
   #viewport
-  #editport
   #layerGrid
+  #layerStream
   #layerCursor
   #layersIndicator
+  #layersTools = new Map()
 
   #overlayGrid
   #overlayIndicator
+  #overlayStream
+  #overlayTools = new Map()
   #overlayCursor
 
   #cursorPos = [0, 0]
   #cursorActive = false
 
   #settings
-  #chartCandle
+  #streamCandle
   #title
   #theme
   #controller
@@ -6681,6 +8138,7 @@ class OffChart {
 
     this.#mediator = mediator;
     this.#elOffChart = mediator.api.elements.elOffChart;
+    this.#elScale = mediator.api.elements.elScale;
     this.#parent = {...this.mediator.api.parent};
     this.#overlay = options.offChart;
     this.#core = this.mediator.api.core;
@@ -6701,13 +8159,16 @@ class OffChart {
   get mediator() { return this.#mediator }
   get options() { return this.#options }
   get core() { return this.#core }
-  get range() { return this.#core.range }
   get pos() { return this.dimensions }
   get dimensions() { return DOM.elementDimPos(this.#elOffChart) }
+  get stateMachine() { return this.#mediator.stateMachine }
   get elOffChart() { return this.#elOffChart }
   get element() { return this.#elOffChart }
   get widgets() { return this.#core.WidgetsG }
   get offChartID() { return this.#offChartID }
+  get data() {}
+  get range() { return this.#core.range }
+  get stream() { return this.#Stream }
   get cursorPos() { return this.#cursorPos }
   get cursorActive() { return this.#cursorActive }
   get candleW() { return this.#core.Timeline.candleW }
@@ -6740,7 +8201,7 @@ class OffChart {
       title: options.offChart.name,
       type: options.offChart.type
     };
-    this.#Legends = new Legends(this.#elLegends);
+    this.#Legends = new Legends(this.#elLegends, this);
     this.#Legends.add(offChartLegend);
 
     // api - functions / methods, calculated properties provided by this module
@@ -6766,7 +8227,6 @@ class OffChart {
     // Y Axis - Price Scale
     this.#Scale.on("started",(data)=>{this.log(`OffChart scale started: ${data}`);});
     this.#Scale.start("OffChart",this.name,"yAxis Scale started");
-
     // add divider to allow manual resize of the offChart indicator
     const config = { offChart: this };
     this.#Divider = this.widgets.insert("Divider", config);
@@ -6790,23 +8250,39 @@ class OffChart {
   }
 
   end() {
+    this.#mediator.stateMachine.destroy();
+    this.#viewport.destroy();
+    this.#Scale.end();
+    this.#Divider.end();
+    this.#Indicator.end();
+
     this.#controller.removeEventListener("mousemove", this.onMouseMove);
     this.#controller.removeEventListener("mouseenter", this.onMouseEnter);
     this.#controller.removeEventListener("mouseout", this.onMouseOut);
+    this.#controller.removeEventListener("mousedown", this.onMouseDown);
+    this.#controller = null;
 
-    this.off("main_mousemove", this.onMouseMove);
+    this.off("main_mousemove", this.updateLegends);
+    this.off(STREAM_LISTENING, this.onStreamListening);
+    this.off(STREAM_NEWVALUE, this.onStreamNewValue);
+    this.off(STREAM_UPDATE, this.onStreamUpdate);
   }
 
 
   eventsListen() {
     // create controller and use 'on' method to receive input events 
-    this.#controller = new InputController(this.#elOffChart);
+    this.#controller = new InputController(this.#elOffChart, {disableContextMenu: false});
+
     this.#controller.on("mousemove", this.onMouseMove.bind(this));
     this.#controller.on("mouseenter", this.onMouseEnter.bind(this));
     this.#controller.on("mouseout", this.onMouseOut.bind(this));
+    this.#controller.on("mousedown", this.onMouseDown.bind(this));
 
     // listen/subscribe/watch for parent notifications
     this.on("main_mousemove", this.updateLegends.bind(this));
+    this.on(STREAM_LISTENING, this.onStreamListening.bind(this));
+    this.on(STREAM_NEWVALUE, this.onStreamNewValue.bind(this));
+    this.on(STREAM_UPDATE, this.onStreamUpdate.bind(this));
   }
 
   on(topic, handler, context) {
@@ -6839,17 +8315,30 @@ class OffChart {
     this.#cursorPos = [Math.floor(e.position.x), Math.floor(e.position.y)];
     this.emit(`${this.ID}_mouseout`, this.#cursorPos);
   }
-// do we need these?
+
   onMouseDown(e) {
-    // this.#cursorPos = [Math.floor(e.position.x), Math.floor(e.position.y)]
-    // this.emit(`${this.ID}_mousedown`, this.#cursorPos)
-    console.log(`${this.ID}_mousedown`);
+    if (this.stateMachine.state === "tool_activated") this.emit("tool_targetSelected", {target: this, position: e});
   }
-// do we need these?
-  onMouseUp(e) {
-    // this.#cursorPos = [Math.floor(e.position.x), Math.floor(e.position.y)]
-    // this.emit(`${this.ID}_mouseup`, this.#cursorPos)
-    console.log(`${this.ID}_mouseup`);
+
+  onStreamListening(stream) {
+    if (this.#Stream !== stream) {
+      this.#Stream = stream;
+      if (this.#layerStream === undefined) this.layerStream();
+    }
+  }
+
+  onStreamNewValue(value) {
+    this.draw(this.range, true);
+  }
+
+  onStreamUpdate(candle) {
+    this.#streamCandle = candle;
+    // calculate new indicator value
+    this.#layerStream.setPosition(this.#core.stream.lastScrollPos, 0);
+    // this.#chartStreamCandle.draw(candle)
+    this.#viewport.render();
+
+    this.updateLegends();
   }
 
   mount(el) {
@@ -6860,7 +8349,8 @@ class OffChart {
     // this.#elWidgets = DOM.findBySelector(`#${api.id} .${CLASS_WIDGETS}`)
     this.#elViewport = DOM.findBySelector(`#${this.#ID} .viewport`);
     this.#elLegends = DOM.findBySelector(`#${this.#ID} .legends`);
-    this.#elScale = DOM.findBySelector(`#${this.#ID} .${CLASS_SCALE}`);
+    // this.#elScale = DOM.findBySelector(`#${this.#ID} .${CLASS_SCALE}`)
+    // this.#elScale2.style.cssText = this.#elScale.style.cssText
   }
 
   props() {
@@ -6889,7 +8379,7 @@ class OffChart {
   }
 
   setDimensions(dim) {
-    const buffer = this.config.buffer || BUFFERSIZE;
+    const buffer = this.config.buffer || BUFFERSIZE$1;
     const width = dim.w - this.#elScale.clientWidth;
     const height = dim.h;
     const layerWidth = Math.round(width * ((100 + buffer) * 0.01));
@@ -6921,27 +8411,27 @@ class OffChart {
 
     const styleOffChart = STYLE_OFFCHART + ` width: ${width}px; height: ${height}px`;
     const styleScale = STYLE_SCALE$1 + ` width: ${api.scaleW - 1}px; height: ${height}px; border-color: ${api.chartBorderColour};`;
-    const styleLegend = `position: absolute; top: 0; left: 0; z-index:100;`;
+    const styleLegend = `width: 100%; position: absolute; top: 0; left: 0; z-index:100;`;
 
     const node = `
       <div class="viewport" style="${styleOffChart}"></div>
       <div class="legends" style="${styleLegend}"></div>
       <div class="${CLASS_SCALE}" style="${styleScale}"></div>
     `;
+    this.#elScale.style.cssText = STYLE_SCALE2 + ` width: ${api.scaleW - 1}px; height: ${height}px; border-color: ${api.chartBorderColour};`;
     return node
   }
 
 // -----------------------
 
+  // setOffChartStyle(chartStyle) {}
+  // getOffChartStyle(chartStyle) {}
+  // setOffChartTheme(chartTheme) {}
+  // getOffChartTheme(chartTheme) {}
+
   createViewport() {
 
-    const buffer = this.config.buffer || BUFFERSIZE;
-    const width = this.#elViewport.clientWidth;
-    const height = this.#options.rowH || this.#parent.rowsH - 1;
-    const layerConfig = { 
-      width: Math.round(width * ((100 + buffer) * 0.01)), 
-      height: height
-    };
+    const {width, height, layerConfig} = this.layerConfig();
 
     // create viewport
     this.#viewport = new CEL.Viewport({
@@ -6986,7 +8476,16 @@ class OffChart {
       this.#theme);
   }
 
-
+  layerConfig() {
+    const buffer = this.config.buffer || BUFFERSIZE$1;
+    const width = this.#elViewport.clientWidth;
+    const height = this.#options.rowH || this.#parent.rowsH - 1;
+    const layerConfig = { 
+      width: Math.round(width * ((100 + buffer) * 0.01)), 
+      height: height
+    };
+    return {width, height, layerConfig}
+  }
 
   layersOnRow(layerConfig) {
     // let l = []
@@ -7005,6 +8504,12 @@ class OffChart {
     this.#viewport.addLayer(this.#layersIndicator);
   }
 
+  layerStream() {
+    const {width, height, layerConfig} = this.layerConfig();
+    this.#layerStream = new CEL.Layer(layerConfig);
+    this.#viewport.addLayer(this.#layerStream);
+  }
+
   draw(range=this.range, update=false) {
     this.#layerGrid.setPosition(this.#core.scrollPos, 0);
     this.#layersIndicator.setPosition(this.#core.scrollPos, 0);
@@ -7018,6 +8523,11 @@ class OffChart {
     }
 
     this.#viewport.render();
+  }
+
+  refresh() {
+    this.draw();
+    this.#Scale.draw();
   }
 
   updateLegends(pos=this.#cursorPos) {
@@ -7066,46 +8576,123 @@ var stateMachineConfig$1 = {
   context: {},
   states: {
     idle: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
+        chart_pan: {
+          target: 'chart_pan',
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to  "chart_pan"`)
+          },
+        },
+        chart_zoom: {
+          target: 'chart_zoom',
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to  "chart_zoom"`)
+          },
+        },
+        chart_scrollto: {
+          target: 'chart_scrollto',
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to  "chart_zoom"`)
+          },
+        },
         addIndicator: {
           target: 'addIndicator',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('offChart: transition from "idle" to "addIndicator" state')
           },
         },
         divider_mousedown: {
           target: 'divider_mousedown',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('offChart: transition from "idle" to "addIndicator" state')
           },
         },
         resize: {
           target: 'resize',
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('offChart: transition from "idle" to "addIndicator" state')
           },
         },
       }
     },
-    addIndicator: {
-      onEnter(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`)
-
-        stateMachine.context.origin.addIndicator(data); 
+    chart_pan: {
+      onEnter (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
       },
-      onExit(stateMachine, data) {
-        // console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`)
+      onExit (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
+      },
+      on: {
+        chart_pan: {
+          target: 'chart_pan',
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "chart_pan"`)
+            this.context.origin.updateRange(data); 
+          },
+        },
+        chart_panDone: {
+          target: 'idle',
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "chart_panDone"`)
+            this.context.origin.updateRange(data); 
+          },
+        },
+      }
+    },
+    chart_zoom: {
+      onEnter (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
+      },
+      onExit (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
+      },
+      on: {
+        always: {
+          target: 'idle',
+          condition: 'zoomDone',
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "idle"`)
+            this.context.origin.zoomRange(data); 
+          },
+        },
+      }
+    },
+    chart_scrollto: {
+      onEnter (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
+      },
+      onExit (data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
+      },
+      on: {
+        always: {
+          target: 'idle',
+          action (data) {
+            console.log(`${this.id}: transition from "${this.state}" to "idle"`);
+            this.context.origin.updateRange(data); 
+          },
+        },
+      }
+    },
+    addIndicator: {
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
+
+        this.context.origin.addIndicator(data); 
+      },
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         addIndicatorDone: {
           target: "idle",
-          action: (stateMachine, data) => {
+          action (data) {
             // console.log('transition action for "onIdle" in "addIndicator" state')
 
           },
@@ -7113,90 +8700,91 @@ var stateMachineConfig$1 = {
       }
     },
     divider_mousedown: {
-      onEnter(stateMachine, data) {
-        console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`);
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
 
-        stateMachine.context.divider = data;
+        this.context.divider = data;
       },
-      onExit(stateMachine, data) {
-        console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`);
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         main_mousemove: {
           target: "divider_mousemove",
-          action: (stateMachine, data) => {
-            console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "ilde"`);
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "ilde"`)
           },
         },
         main_mouseup: {
           target: "idle",
-          action: (stateMachine, data) => {
-            console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "ilde"`);
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "ilde"`)
           },
         }
       }
     },
     divider_mousemove: {
-      onEnter(stateMachine, data) {
-        console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`);
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
 
-        let divider = stateMachine.context.divider;
-        stateMachine.context.pair = stateMachine.context.origin.resizeRowPair(divider, data); 
+        let divider = this.context.divider;
+        this.context.pair = this.context.origin.resizeRowPair(divider, data); 
       },
-      onExit(stateMachine, data) {
-        console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`);
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         main_mousemove: {
           target: "divider_mousemove",
-          action: (stateMachine, data) => {
-            console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "ilde"`);
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "ilde"`)
           },
         },
         main_mouseup: {
           target: "idle",
-          action: (stateMachine, data) => {
-            stateMachine.actions.removeProperty(stateMachine);
+          action (data) {
+            this.actions.removeProperty.call(this);
 
-            console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "ilde"`);
+            // console.log(`${this.id}: transition from "${this.state}" to "ilde"`)
           },
         },
         divider_mouseup: {
           target: "idle",
-          action: (stateMachine, data) => {
-            stateMachine.actions.removeProperty(stateMachine);
+          action (data) {
+            this.actions.removeProperty.call(this);
 
-            console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "ilde"`);
+            // console.log(`${this.id}: transition from "${this.state}" to "ilde"`)
           },
         }
       }
     },
     resize: {
-      onEnter(stateMachine, data) {
-        console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`);
-        stateMachine.context.origin.setDimensions(data);
+      onEnter(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onEnter`)
+        this.context.origin.setDimensions(data);
       },
-      onExit(stateMachine, data) {
-        console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`);
+      onExit(data) {
+        // console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`)
       },
       on: {
         always: {
           target: 'idle',
           condition: 'resizeDone',
-          action: (stateMachine, data) => {
-            // console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "idle"`)
+          action (data) {
+            // console.log(`${this.id}: transition from "${this.state}" to "idle"`)
           },
         },
       },
     }
   },
   guards: {
-    resizeDone: (context, event, { cond }) => { return true }
+    zoomDone () { return true },
+    resizeDone () { return true },
   },
   actions: {
-    removeProperty: (stateMachine) => {
-      let active = stateMachine.context.pair.active,
-      prev = stateMachine.context.pair.prev;
+    removeProperty () {
+      let active = this.context.pair.active,
+      prev = this.context.pair.prev;
 
       active.element.style.removeProperty('user-select');
       // active.element.style.removeProperty('pointer-events');
@@ -7214,6 +8802,11 @@ const STYLE_TIME = "border-top: 1px solid; width:100%; min-width:100%;";
 const STYLE_SCALE = "border-left: 1px solid;";
 
 
+/**
+ * Provides chart main pane that hosts, chart, off charts (indicators), timeline, widgets
+ * @export
+ * @class MainPane
+ */
 class MainPane {
 
   #name = "Utilities"
@@ -7222,11 +8815,14 @@ class MainPane {
   #options
   #parent
   #core
+  #elYAxis
   #elMain
   #elRows
   #elTime
   #elChart
+  #elChartScale
   #elOffCharts = []
+  #elYAxisScales = []
   #elGrid
   #elCanvas
   #elViewport
@@ -7253,9 +8849,10 @@ class MainPane {
 
     this.#mediator = mediator;
     this.#options = options;
-    this.#elMain = mediator.api.elements.elMain;
     this.#parent = {...this.#mediator.api.parent};
     this.#core = this.#mediator.api.core;
+    this.#elMain = this.#core.elMain;
+    this.#elYAxis = this.#core.elYAxis;
     this.init(options);
   }
 
@@ -7269,6 +8866,7 @@ class MainPane {
   get mediator() { return this.#mediator }
   get chart() { return this.#Chart }
   get time() { return this.#Time }
+  get offCharts() { return this.#OffCharts }
   get options() { return this.#options }
   get width() { return this.#elMain.clientWidth }
   get height() { return this.#elMain.clientHeight }
@@ -7302,6 +8900,7 @@ class MainPane {
     this.#elChart = DOM.findBySelector(`#${api.id} .${CLASS_CHART}`);
     this.#elGrid = DOM.findBySelector(`#${api.id} .${CLASS_GRID}`);
     this.#elViewport = DOM.findBySelector(`#${api.id} .${CLASS_GRID} .viewport`);
+    this.#elChartScale  = DOM.findBySelector(`#${api.id} .${CLASS_YAXIS} .${CLASS_CHART}`);
 
     api.parent = this;
     api.chartData = this.mediator.api.chartData;
@@ -7317,7 +8916,8 @@ class MainPane {
           elChart: this.#elChart,
           elTime: this.#elTime,
           elRows: this.#elRows,
-          elOffCharts: this.#elOffCharts
+          elOffCharts: this.#elOffCharts,
+          elChartScale: this.#elChartScale
         }
       };
 
@@ -7328,7 +8928,7 @@ class MainPane {
     // register chart
     this.#Chart = this.#mediator.register("Chart", Chart, options, api);
 
-    this.#buffer = isNumber(this.config.buffer)? this.config.buffer : BUFFERSIZE;
+    this.#buffer = isNumber(this.config.buffer)? this.config.buffer : BUFFERSIZE$1;
     this.#rowMinH = isNumber(this.config.rowMinH)? this.config.rowMinH : ROWMINHEIGHT;
     this.#offChartDefaultH = isNumber(this.config.offChartDefaultH)? this.config.offChartDefaultH : OFFCHARTDEFAULTHEIGHT;
 
@@ -7336,10 +8936,10 @@ class MainPane {
   }
 
   start() {
+    let i = 0;
+
     this.#Time.start();
     this.#Chart.start();
-
-    let i = 0;
     this.#OffCharts.forEach((offChart, key) => {
       offChart.start(i++);
     });
@@ -7359,12 +8959,23 @@ class MainPane {
   }
 
   end() {
+    this.#mediator.stateMachine.destroy();
+    this.#Time.end();
+    this.#Chart.end();
+    this.#OffCharts.forEach((offChart, key) => {
+      offChart.end();
+    });
+    this.#viewport.destroy();
+
     this.#controller.removeEventListener("mousewheel", this.onMouseWheel);
     this.#controller.removeEventListener("mousemove", this.onMouseMove);
     this.#controller.removeEventListener("drag", this.onChartDrag);
     this.#controller.removeEventListener("enddrag", this.onChartDragDone);
     this.#controller.removeEventListener("keydown", this.onChartKeyDown);
     this.#controller.removeEventListener("keyup", this.onChartKeyDown);
+    this.#controller = null;
+
+    this.off(STREAM_NEWVALUE, this.onNewStreamValue);
   }
 
 
@@ -7374,7 +8985,8 @@ class MainPane {
     this.#elMain.focus();
 
     // create controller and use 'on' method to receive input events 
-    this.#controller = new InputController(this.#elMain);
+    this.#controller = new InputController(this.#elMain, {disableContextMenu: false});
+
     this.#controller.on("mousewheel", this.onMouseWheel.bind(this));
     this.#controller.on("mousemove", this.onMouseMove.bind(this));
     this.#controller.on("drag", this.onChartDrag.bind(this));
@@ -7385,6 +8997,7 @@ class MainPane {
     this.#controller.on("mouseup", this.onMouseUp.bind(this));
 
     // listen/subscribe/watch for parent notifications
+    this.on(STREAM_NEWVALUE, this.onNewStreamValue.bind(this));
   }
 
   on(topic, handler, context) {
@@ -7402,7 +9015,7 @@ class MainPane {
   onMouseWheel(e) {
     e.domEvent.preventDefault();
 
-    const direction = Math.sign(e.wheeldelta);
+    const direction = Math.sign(e.wheeldelta) * -1;
     const range = this.range;
     const newStart = range.indexStart - Math.floor(direction * XAXIS_ZOOM$1 * range.Length);
     const newEnd = range.indexEnd + Math.floor(direction * XAXIS_ZOOM$1 * range.Length);
@@ -7429,7 +9042,6 @@ class MainPane {
 
   onMouseUp(e) {
     this.emit("main_mouseup", e);
-    // console.log("Main Pane: mouse up")
   }
 
   onChartDrag(e) {
@@ -7440,7 +9052,6 @@ class MainPane {
     ];
     this.emit("chart_pan", this.#cursorPos);
     this.draw();
-    // console.log("what a drag!")
   }
 
   onChartDragDone(e) {
@@ -7451,42 +9062,37 @@ class MainPane {
     ];
     this.emit("chart_panDone", this.#cursorPos);
     this.draw();
-    // console.log("drag done")
   }
 
   onChartKeyDown(e) {
-    let step = this.candleW || 1;
+    let step = (this.candleW > 1) ? this.candleW : 1;
 
     switch (e.keyCode) {
       case Keys.Left:
-        // console.log("keydown: cursor Left")
-
-        this.emit("chart_pan", [0,null,step,null,step * -1]);
+        this.emit("chart_pan", [0,null,step,null,step * -1,null]);
         break;
       case Keys.Right:
-        // console.log("keydown: cursor Right")
-
-        this.emit("chart_pan", [step,null,0,null,step]);
+        this.emit("chart_pan", [step,null,0,null,step,null]);
         break;
     }
     this.draw();
   }
 
   onChartKeyUp(e) {
-    let step = this.candleW || 1;
+    let step = (this.candleW > 1) ? this.candleW : 1;
 
     switch (e.keyCode) {
       case Keys.Left:
-        // console.log("keyup: cursor Left")
-        
-        this.emit("chart_panDone", [0,null,step,null,step * -1]);
+        this.emit("chart_panDone", [0,null,step,null,step * -1,null]);
         break;
       case Keys.Right:
-        // console.log("keyup: cursor Right")
-
-        this.emit("chart_panDone", [step,null,0,null,step]);
+        this.emit("chart_panDone", [step,null,0,null,step,null]);
         break;
     }
+    this.draw();
+  }
+
+  onNewStreamValue(value) {
     this.draw();
   }
 
@@ -7603,7 +9209,11 @@ class MainPane {
     this.#elRows.lastElementChild.insertAdjacentHTML("afterend", this.rowNode(offChart.type));
     this.#elOffCharts.push(this.#elRows.lastElementChild);
 
+    this.#elYAxis.lastElementChild.insertAdjacentHTML("afterend", this.scaleNode(offChart.type));
+    this.#elYAxisScales.push(this.#elYAxis.lastElementChild);
+
     api.elements.elOffChart = this.#elRows.lastElementChild;
+    api.elements.elScale = this.#elYAxis.lastElementChild;
     options.offChart = offChart;
 
     let o = this.#mediator.register("OffChart", OffChart, options, api);
@@ -7614,10 +9224,10 @@ class MainPane {
   }
 
   addIndicator(ind) {
-    console.log(`Add the ${ind.target} indicator`);
+    console.log(`Add the ${ind} indicator`);
 
     // final indicator object
-    const indicator = this.#indicators[ind.target].ind;
+    const indicator = this.#indicators[ind].ind;
     console.log("indicator:",indicator);
     // check if we already have indicator data in the chart state
     // generate indicator data
@@ -7631,7 +9241,7 @@ class MainPane {
 
   defaultNode() {
     const api = this.#mediator.api;
-    const styleRows = STYLE_ROWS + `height: calc(100% - ${api.timeH}px)`;
+    const styleRows = STYLE_ROWS + ` height: calc(100% - ${api.timeH}px)`;
     const styleTime = STYLE_TIME + ` height: ${api.timeH}px; border-color: ${api.chartBorderColour};`;
     const defaultRow = this.defaultRowNode();
 
@@ -7655,6 +9265,9 @@ class MainPane {
                       <div class="viewport" style="${styleGrid}"></div>
                   </div>`;
           node += this.rowNode(CLASS_CHART);
+
+    this.#elYAxis.innerHTML = this.scaleNode(CLASS_CHART);
+    
     return node
   }
 
@@ -7666,7 +9279,22 @@ class MainPane {
     const node = `
       <div class="${CLASS_ROW} ${type}" style="${styleRow}">
         <canvas><canvas/>
-        <div class="${styleScale}">
+        <div style="${styleScale}">
+          <canvas id=""><canvas/>
+        </div>
+      </div>
+    `;
+    return node
+  }
+
+  scaleNode(type) {
+    const api = this.#mediator.api;
+    const styleRow = STYLE_ROW + ` border-top: 1px solid ${api.chartBorderColour};`;
+    const styleScale = STYLE_SCALE + ` border-color: ${api.chartBorderColour};`;
+
+    const node = `
+      <div class="${CLASS_ROW} ${type}" style="${styleRow}">
+        <div style="${styleScale}">
           <canvas id=""><canvas/>
         </div>
       </div>
@@ -7708,10 +9336,7 @@ class MainPane {
   }
 
   initXGrid() {
-    this.#layerGrid.setPosition(this.scrollPos, 0);
-    this.#chartGrid.draw("x");
-    this.#viewport.render();
-    this.#Time.draw();
+    this.draw();
   }
 
   draw() {
@@ -7721,7 +9346,8 @@ class MainPane {
     this.#Time.draw();
   }
 
-  updateRange() {
+  updateRange(pos) {
+    this.#core.updateRange(pos);
     // draw the grid
     this.draw();
   }
@@ -7759,6 +9385,8 @@ class MainPane {
 }
 
 // menu.js
+
+const MENUMINWIDTH = 150;
 
 class Menu {
 
@@ -7872,7 +9500,6 @@ class Menu {
           evt: evt
         };
         
-    this.emit(evt, data);
     this.emit("menuItemSelected", data);
     this.emit("closeMenu", data);
   }
@@ -7923,8 +9550,8 @@ class Menu {
 
   content(menu) {
     this.#mediator.api;
-    const listStyle = "list-style: none; text-align: left; margin:1em 1em 1em -2.5em;";
-    const itemStyle = "padding: .25em 1em .25em 1em;";
+    const listStyle = `list-style: none; text-align: left; margin:1em 1em 1em -2.5em; min-width: ${MENUMINWIDTH}px`;
+    const itemStyle = "padding: .25em 1em .25em 1em; white-space: nowrap;";
     const shortStyle = "display: inline-block; width: 4em;";
     const cPointer = "cursor: pointer;";
     const over = `onmouseover="this.style.background ='#222'"`;
@@ -7959,6 +9586,14 @@ class Menu {
 
     Menu.currentActive = this;
     this.#elMenu.style.display = "block";
+
+    let pos = DOM.elementDimPos(this.#elMenu);
+    let posR = pos.left + pos.width;
+    if (posR > this.#elWidgetsG.offsetWidth) {
+      let o = Math.floor(this.#elWidgetsG.offsetWidth - pos.width);
+          o = limit(o, 0, this.#elWidgetsG.offsetWidth);
+      this.#elMenu.style.left = `${o}px`;
+    }
   }
 
   // hide the menu
@@ -8330,6 +9965,7 @@ class Divider {
     this.#controller.removeEventListener("mouseout", this.onMouseOut);
     this.#controller.removeEventListener("drag", this.onDividerDrag);
     this.#controller.removeEventListener("enddrag", this.onDividerDragDone);
+    this.#controller = null;
 
     // remove element
     this.el.remove();
@@ -8337,7 +9973,8 @@ class Divider {
 
   eventsListen() {
     // create controller and use 'on' method to receive input events
-    this.#controller = new InputController(this.#elDivider);
+    this.#controller = new InputController(this.#elDivider, {disableContextMenu: false});
+
     this.#controller.on("mouseenter", this.onMouseEnter.bind(this));
     this.#controller.on("mouseout", this.onMouseOut.bind(this));
     this.#controller.on("drag", this.onDividerDrag.bind(this));
@@ -8473,61 +10110,61 @@ var stateMachineConfig = {
   context: {},
   states: {
     idle: {
-      onEnter(stateMachine, data) {
-        console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`);
+      onEnter(data) {
+        console.log(`${this.id}: state: "${this.state}" - onEnter`);
       },
-      onExit(stateMachine, data) {
-        console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`);
+      onExit(data) {
+        console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`);
       },
       on: {
         openMenu: {
           target: 'openMenu',
-          action: (stateMachine, data) => {
-            console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "openMenu" on ${stateMachine.event}`);
+          action (data) {
+            console.log(`${this.id}: transition from "${this.state}" to "openMenu" on ${this.event}`);
           },
         },
       }
     },
     openMenu: {
-      onEnter(stateMachine, data) {
-        console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`);
+      onEnter(data) {
+        console.log(`${this.id}: state: "${this.state}" - onEnter`);
 
-        // stateMachine.context.origin.instances[data.menu].open()
-        // stateMachine.context.origin.instances[data.menu].offMenu()
+        // this.context.origin.instances[data.menu].open()
+        // this.context.origin.instances[data.menu].offMenu()
 
       },
-      onExit(stateMachine, data) {
-        console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`);
+      onExit(data) {
+        console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`);
 
-        // stateMachine.context.origin.instances[data.menu].close()
+        // this.context.origin.instances[data.menu].close()
       },
       on: {
         closeMenu: {
           target: "idle",
-          action: (stateMachine, data) => {
-            console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "idle" on "${stateMachine.event}"`);
+          action (data) {
+            console.log(`${this.id}: transition from "${this.state}" to "idle" on "${this.event}"`);
           },
         },
       }
     },
     openWindow: {
-      onEnter(stateMachine, data) {
-        console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onEnter`);
+      onEnter(data) {
+        console.log(`${this.id}: state: "${this.state}" - onEnter`);
 
-        // stateMachine.context.origin.instances[data.menu].open()
-        // stateMachine.context.origin.instances[data.menu].offMenu()
+        // this.context.origin.instances[data.menu].open()
+        // this.context.origin.instances[data.menu].offMenu()
 
       },
-      onExit(stateMachine, data) {
-        console.log(`${stateMachine.id}: state: "${stateMachine.state}" - onExit (${stateMachine.event})`);
+      onExit(data) {
+        console.log(`${this.id}: state: "${this.state}" - onExit (${this.event})`);
 
-        // stateMachine.context.origin.instances[data.menu].close()
+        // this.context.origin.instances[data.menu].close()
       },
       on: {
         closeWindow: {
           target: "idle",
-          action: (stateMachine, data) => {
-            console.log(`${stateMachine.id}: transition from "${stateMachine.state}" to "idle" on "${stateMachine.event}"`);
+          action (data) {
+            console.log(`${this.id}: transition from "${this.state}" to "idle" on "${this.event}"`);
           },
         },
       }
@@ -8627,6 +10264,7 @@ class Widgets {
     this.on("openMenu", this.onOpenMenu.bind(this));
     this.on("closeMenu", this.onCloseMenu.bind(this));
     this.on("offMenu", this.onCloseMenu.bind(this));
+    this.on("menuItemSelected", this.onMenuItemSelected.bind(this));
   }
 
   on(topic, handler, context) {
@@ -8654,6 +10292,12 @@ class Widgets {
     console.log("onCloseMenu:", data);
 
     this.#widgetsInstances[data.menu].close();
+  }
+
+  onMenuItemSelected(e) {
+    // console.log("onMenuItemSelected:",e)
+
+    this.emit(e.evt, e.target);
   }
 
   mount(el) {
@@ -8802,100 +10446,258 @@ function isValidCandle(c, isCrypto=false) {
 
 // range.js
 
-function getRange( allData, start=0, end=allData.chart.length-1 ) {
-  let r = allData;
-  r.dataLength = r.data.length - 1;
+class Range {
 
-  // check and correct start and end argument order
-  if (start > end) [start, end] = [end, start];
-
-  // minimum range constraint
-  if ((end - start) < MINCANDLES) end = start + MINCANDLES + 1;
-
-  // set out of history bounds limits
-  start = (start < LIMITPAST * -1) ? LIMITPAST * -1 : start;
-  end = (end < (LIMITPAST * -1) + MINCANDLES) ? (LIMITPAST * -1) + MINCANDLES + 1 : end;
-  start = (start > r.dataLength + LIMITFUTURE - MINCANDLES) ? r.dataLength + LIMITFUTURE - MINCANDLES - 1: start;
-  end = (end > r.dataLength + LIMITFUTURE) ? r.dataLength + LIMITFUTURE : end;
-  
-  r.value = (index) =>{ return rangeValue(r, index)};
-  r.interval = r.data[1][0] - r.data[0][0];
-  r.intervalStr = ms2Interval(r.interval);
-  r.indexStart = start;
-  r.indexEnd = end;
-  r.Length = r.indexEnd - r.indexStart;
-  r.timeStart = r.value(0)[0];
-  r.timeFinish = r.value(r.dataLength)[0];
-  r.timeDuration = r.timeFinish - r.timeStart;
-  r.timeMin = r.value(r.indexStart)[0];
-  r.timeMax = r.value(r.indexEnd)[0];
-  r.rangeDuration = r.timeMax - r.timeMin;
-  r = {...r, ...maxMinPriceVol(r.data, r.indexStart, r.indexEnd)};
-  r.height = r.priceMax - r.priceMin;
-  r.volumeHeight = r.volumeMax - r.volumeMin;
-  r.scale = (r.Length) / (r.dataLength - 1);
-  return r
-}
-
-function rangeValue( range, index ) {
-  let v = range.data[index];
-  if (v !== undefined) return v
-  else {
-    const len = range.data.length - 1;
-    v = [null, null, null, null, null, null];
-    if (index < 0) {
-      v[0] = range.data[0][0] + (range.interval * index);
-      return v
-    }
-    else if (index > len) {
-      v[0] = range.data[len][0] + (range.interval * (index - len));
-      return v
-    }
-    else return null
+  data
+  // dataLength
+  #interval = DEFAULT_TIMEFRAMEMS
+  #intervalStr = "1s"
+  indexStart = 0
+  indexEnd = LIMITFUTURE
+  priceMin = 0
+  priceMax = 0
+  volumeMin = 0
+  volumeMax = 0
+  limitFuture = LIMITFUTURE
+  limitPast = LIMITPAST
+  minCandles = MINCANDLES
+  yAxisBounds = YAXIS_BOUNDS
+  rangeLimit = LIMITFUTURE
+  anchor
+  #rangeMode = "automatic"
+  #yRangeManual = {
+    max: 1,
+    min: 0,
+    factor: 1
   }
-}
+
+  constructor( allData, start=0, end=allData.data.length-1, config={}) {
+    if (!isObject(allData)) return false
+    if (!isObject(config)) return false
+
+    this.limitFuture = (isNumber(this.config?.limitFuture)) ? this.config.limitFuture : LIMITFUTURE;
+    this.limitPast = (isNumber(this.config?.limitPast)) ? this.config.limitPast : LIMITPAST;
+    this.minCandles = (isNumber(this.config?.limitCandles)) ? this.config.limitCandles : MINCANDLES;
+    this.yAxisBounds = (isNumber(this.config?.limitBounds)) ? this.config.limitBounds : YAXIS_BOUNDS;
+
+    const tf = config?.interval || DEFAULT_TIMEFRAMEMS;
+
+    if (allData.data.length == 0) {
+      let ts = Date.now();
+      start = 0;
+      end = this.rangeLimit;
+      this.#interval = tf;
+      this.#intervalStr = ms2Interval(this.interval);
+      this.anchor = ts - (ts % tf); // - (this.limitPast * this.#interval)
+    }  
+    else if (allData.data.length < 2) {
+      this.#interval = tf;
+      this.#intervalStr = ms2Interval(this.interval);
+    }
+    else if (end == 0 && allData.data.length >= this.rangeLimit)
+      end = this.rangeLimit;
+    else if (end == 0)
+      end = allData.data.length;
+
+    
+    for (let data in allData) {
+      this[data] = allData[data];
+    }
+
+    if (!this.set(start, end)) return false
+
+    if (allData.data.length > 2) {
+      this.#interval = detectInterval(this.data);
+      this.#intervalStr = ms2Interval(this.interval);
+    }
+  }
+
+  get dataLength () { return (this.data.length == 0) ? 0 : this.data.length - 1 }
+  get Length () { return this.indexEnd - this.indexStart }
+  get timeDuration () { return this.timeFinish - this.timeStart }
+  get timeMin () { return this.value(this.indexStart)[0] }
+  get timeMax () { return this.value(this.indexEnd)[0] }
+  get rangeDuration () { return this.timeMax - this.timeMin }
+  get timeStart () { return this.value(0)[0] }
+  get timeFinish () { return this.value(this.dataLength)[0] }
+  set interval (i) { this.#interval = i; }
+  get interval () { return this.#interval }
+  set intervalStr (i) { this.#intervalStr = i; }
+  get intervalStr () { return this.#intervalStr }
+  set mode (m) { this.setMode(m); }
+  get mode () { return this.#rangeMode }
+
+  set (start=0, end=this.dataLength) {
+    if (!isNumber(start) || 
+        !isNumber(end)) return false
+
+    // check and correct start and end argument order
+    if (start > end) [start, end] = [end, start];
+    // minimum range constraint
+    if ((end - start) < this.minCandles) end = start + this.minCandles + 1;
+
+    // set out of history bounds limits
+    start = (start < this.limitPast * -1) ? this.limitPast * -1 : start;
+    end = (end < (this.limitPast * -1) + this.minCandles) ? (this.limitPast * -1) + this.minCandles + 1 : end;
+    start = (start > this.dataLength + this.limitFuture - this.minCandles) ? this.dataLength + this.limitFuture - this.minCandles - 1: start;
+    end = (end > this.dataLength + this.limitFuture) ? this.dataLength + this.limitFuture : end;
+  
+    this.indexStart = start;
+    this.indexEnd = end;
+
+    let maxMin = this.maxMinPriceVol(this.data, this.indexStart, this.indexEnd);
+
+    if (this.#rangeMode = "manual") ;
+
+    for (let m in maxMin) {
+      this[m] = maxMin[m];
+    }
+    this.height = this.priceMax - this.priceMin;
+    this.volumeHeight = this.volumeMax - this.volumeMin;
+    this.scale = (this.dataLength != 0) ? this.Length / this.dataLength : 1;
+
+    return true
+  }
+
+  setMode(m) {
+    if (m == "automatic" || m == "manual") this.#rangeMode = m;
+    if (m == "manual") this.#yRangeManual.factor = 0;
+    this.#yRangeManual.max = this.priceMax;
+    this.#yRangeManual.min = this.priceMin;
+  }
+
+  yFactor(f) {
+    if (!isNumber(f) || this.#rangeMode !== "manual") return false
+    this.#yRangeManual.factor += f * -1;
+  }
+
+  /**
+   * 
+   * @param {number} index - price history index, out of bounds will return null filled entry
+   * @returns {array}
+   */
+  value ( index ) {
+    // return last value as default
+    if (!isNumber(index)) index = this.data.length - 1;
+  
+    let v = this.data[index];
+    if (v !== undefined) return v
+    else {
+      const len = this.data.length - 1;
+      v = [null, null, null, null, null, null];
+
+      if (this.data.length < 1) {
+        v[0] = Date.now() + (this.interval * index);
+        return v
+      }
+      else if (index < 0) {
+        v[0] = this.data[0][0] + (this.interval * index);
+        return v
+      }
+      else if (index > len) {
+        v[0] = this.data[len][0] + (this.interval * (index - len));
+        return v
+      }
+      else return null
+    }
+  }
+
+  /**
+   * Return time index
+   * @param {number} ts - timestamp
+   * @returns {number}
+   */
+   getTimeIndex (ts) {
+    if (!isNumber(ts)) return false
+    ts = ts - (ts % this.interval);
+  
+    let x = (this.data.length > 0) ? this.data[0][0] : this.anchor;
+    if (ts === x) 
+      return 0
+    else if (ts < x)
+      return ((x - ts) / this.interval) * -1
+    else 
+      return (ts - x) / this.interval
+  }
+
+  /**
+   * Is timestamp in current range
+   * @param {number} t - timestamp
+   * @returns {boolean}
+   */
+  inRange(t) {
+    if (t >= this.timeMin && t <= this.timeMax)
+      return true
+    else return false
+  }
+
+  inPriceHistory (ts) { return this.inRange(ts) }
+  
+  /**
+   * Return index offset of timestamp relative to range start
+   * @param {number} ts - timestamp
+   * @returns {number}
+   */
+  rangeIndex (ts) { return this.getTimeIndex(ts) - this.indexStart }
+
+  /**
+   * Find price maximum and minimum, volume maximum and minimum
+   * @param {array} data
+   * @param {number} [start=0]
+   * @param {number} [end=data.length-1]
+   * @return {object}  
+   */
+  maxMinPriceVol ( data, start=0, end=data.length-1 ) {
+
+    if (data.length == 0) {
+      return {
+        priceMin: 0,
+        priceMax: 1,
+        volumeMin: 0,
+        volumeMax: 0
+      }
+    }
+    let l = data.length - 1;
+    let i = limit(start, 0, l);
+    let c = limit(end, 0, l);
+
+    let priceMin  = data[i][3];
+    let priceMax  = data[i][2];
+    let volumeMin = data[i][5];
+    let volumeMax = data[i][5];
+
+    while(i++ < c) {
+      priceMin  = (data[i][3] < priceMin) ? data[i][3] : priceMin;
+      priceMax  = (data[i][2] > priceMax) ? data[i][2] : priceMax;
+      volumeMin = (data[i][5] < volumeMin) ? data[i][5] : volumeMin;
+      volumeMax = (data[i][5] > volumeMax) ? data[i][5] : volumeMax;
+    }
+
+    return {
+      priceMin: priceMin * (1 - this.yAxisBounds),
+      priceMax: priceMax * (1 + this.yAxisBounds),
+      volumeMin: volumeMin,
+      volumeMax: volumeMax
+    }
+  }
+
+  /**
+   * 
+   * @param {number} t 
+   * @returns {boolean}
+   */
+  inPriceHistory (t) {
+    if (t >= this.timeStart && t <= this.timeFinish)
+      return true
+    else return false
+  }
+} // end class
 
 /**
- * Find price maximum and minimum, volume maximum and minimum
- *
- * @export
- * @param {array} data
- * @param {number} [start=0]
- * @param {number} [end=data.length-1]
- * @return {object}  
+ * Detects candles interval
+ * @param {array} ohlcv - array of ohlcv values (price history)
+ * @returns {number} - milliseconds
  */
-function maxMinPriceVol( data, start=0, end=data.length-1 ) {
-
-  let l = data.length-1;
-  let i = (start < 0) ? 0 : start;
-      i = (start >= data.length) ? l - MINCANDLES : i;
-  let c = (end < 0) ? MINCANDLES : end;
-      c = (end >= l) ? l : c;
-  
-  // let i = start,
-  //     c = end;
-  let priceMin  = data[i][3];
-  let priceMax  = data[i][2];
-  let volumeMin = data[i][5];
-  let volumeMax = data[i][5];
-
-  while(i++ < c) {
-    priceMin  = (data[i][3] < priceMin) ? data[i][3] : priceMin;
-    priceMax  = (data[i][2] > priceMax) ? data[i][2] : priceMax;
-    volumeMin = (data[i][5] < volumeMin) ? data[i][5] : volumeMin;
-    volumeMax = (data[i][5] > volumeMax) ? data[i][5] : volumeMax;
-  }
-
-  return {
-    priceMin: priceMin * 0.995,
-    priceMax: priceMax * 1.005,
-    volumeMin: volumeMin,
-    volumeMax: volumeMax
-  }
-}
-
-
-// Detects candles interval
 function detectInterval(ohlcv) {
 
   let len = Math.min(ohlcv.length - 1, 99);
@@ -8911,6 +10713,29 @@ function detectInterval(ohlcv) {
   return min
 }
 
+/**
+ * Calculate the index for a given time stamp
+ * @param {object} time - time object provided by core
+ * @param {number} timeStamp 
+ * @returns {number}
+ */
+function calcTimeIndex(time, timeStamp) {
+  if (!isNumber(timeStamp)) return false
+
+  let index;
+  let timeFrameMS = time.timeFrameMS;
+  timeStamp = timeStamp - (timeStamp % timeFrameMS);
+
+  if (timeStamp === time.range.data[0][0])
+    index = 0;
+  else if (timeStamp < time.range.data[0][0]) 
+    index = ((time.range.data[0][0] - timeStamp) / timeFrameMS) * -1;
+  else 
+    index = (timeStamp - time.range.data[0][0]) / timeFrameMS;
+
+  return index
+}
+
 // state.js
 
 const DEFAULT_STATE = {
@@ -8921,8 +10746,8 @@ const DEFAULT_STATE = {
     data: [],
     settings: {},
     row: {},
-    tf: "",
-    tfms: 0
+    tf: DEFAULT_TIMEFRAME,
+    tfms: DEFAULT_TIMEFRAMEMS
   },
   onchart: [],
   offchart: [],
@@ -8943,6 +10768,7 @@ class State {
   #store
   #dss = {}
   #status = false
+  #isEmpty = true
 
   constructor(state, deepValidate=false, isCrypto=false) {
     // this.#store = new Store()
@@ -8951,10 +10777,12 @@ class State {
     if (isObject(state)) {
       this.#data = this.validateState(state, deepValidate, isCrypto);
       this.#status = "valid";
+      this.#isEmpty = (this.#data.chart?.isEmpty) ? true : false;
     }
     else {
       this.defaultState();
       this.#status = "default";
+      this.#isEmpty = true;
     }
   }
 
@@ -8970,15 +10798,15 @@ class State {
 
   get status() { return this.#status }
   get data() { return this.#data }
+  get isEmpty() { return this.#isEmpty }
 
   validateState(state, deepValidate=false, isCrypto=false) {
 
     if (!('chart' in state)) {
-      state.chart = {
-          type: 'Candles',
-          candleType: "CANDLE_SOLID",
-          data: state.ohlcv || []
-      };
+      state.chart = DEFAULT_STATE.chart;
+      state.chart.data = state?.ohlcv || [];
+      state.chart.settings = state?.settings || state.chart.settings;
+      state.chart.isEmpty = true;
     }
 
     if (deepValidate) 
@@ -8986,22 +10814,27 @@ class State {
     else 
       state.chart.data = validateShallow(state.chart.data, isCrypto) ? state.chart.data : [];
 
-    if (typeof state.chart?.tf !== "number" || deepValidate)
-      state.chart.tfms = detectInterval(state.chart.data);
+    if (!isNumber(state.chart?.tf) || deepValidate) {
+      let tfms = detectInterval(state.chart.data);
+      // this SHOULD never happen, 
+      // but there are limits to fixing broken data sent to chart
+      if (tfms < SECOND) tfms = DEFAULT_TIMEFRAMEMS;
+      state.chart.tfms = tfms;
+    }
     
-    if (typeof state.chart?.tfms !== "string" || deepValidate)
+    if (!isString(state.chart?.tfms) || deepValidate)
       state.chart.tf = ms2Interval(state.chart.tfms);
 
     if (!('onchart' in state)) {
-        state.onchart = [];
+        state.onchart = DEFAULT_STATE.onchart;
     }
 
     if (!('offchart' in state)) {
-        state.offchart = [];
+        state.offchart = DEFAULT_STATE.offchart;
     }
 
     if (!state.chart.settings) {
-        state.chart.settings = {};
+        state.chart.settings = DEFAULT_STATE.chart.settings;
     }
 
     // Remove ohlcv we have Data
@@ -9030,6 +10863,147 @@ class State {
 
 }
 
+const T = 0, H = 2, L = 3, C = 4, V = 5;
+const empty = [null, null, null, null, null];
+
+class Stream {
+
+  #core
+  #maxUpdate
+  #updateTimer
+  #status
+  #candle = empty
+  #precision
+
+
+  constructor(core) {
+    this.#core = core;
+    this.#maxUpdate = (isNumber(core.config?.maxCandleUpdate)) ? core.config.maxCandleUpdate : STREAM_MAXUPDATE;
+    this.#precision = (isNumber(core.config?.streamPrecision)) ? core.config.streamPrecision : STREAM_PRECISION;
+    this.status = {status: STREAM_NONE};
+  }
+
+  emit(topic, data) {
+    this.#core.emit(topic, data);
+  }
+
+  start() {
+    // add empty value to range end
+    // this.#core.chartData.push([0,0,0,0,0,0])
+    // iterate over indicators add empty value to end
+
+    this.status = {status: STREAM_STARTED};
+    this.#updateTimer = setInterval(this.onUpdate.bind(this), this.#maxUpdate);
+  }
+
+  stop() {
+    this.status = {status: STREAM_STOPPED};
+  }
+
+  error() {
+    this.status = {status: STREAM_ERROR};
+  }
+
+  onTick(tick) {
+    if (this.#status == STREAM_STARTED || this.#status == STREAM_LISTENING) {
+      if (isObject(tick)) this.candle = tick;
+    }
+  }
+
+  onUpdate() {
+    if (this.#candle !== empty) {
+      this.status = {status: STREAM_UPDATE, data: this.candle};
+      this.status = {status: STREAM_LISTENING, data: this.#candle};
+    }
+  }
+
+  get range() { return this.#core.range }
+
+  get status() { return this.#status }
+  set status({status, data}) {
+    this.#status = status;
+    this.emit(status, data);
+  }
+
+  /**
+   * process price tick
+   *
+   * @param {object} data - t: timestamp, p: price, q: quantity
+   * @memberof Stream
+   */
+  set candle(data) {
+    // const r = this.range
+    // if (data.p > r.priceMax || data.p < r.priceMin) {}
+
+    // round time to nearest current time unit
+    const tfms = this.#core.time.timeFrameMS;
+    let roundedTime = Math.floor(new Date(data.t) / tfms) * tfms;
+    data.t = roundedTime;
+
+    if (this.#candle[T] !== data.t) {
+      this.newCandle(data);
+    }
+    else {
+      this.updateCandle(data);
+    }
+    this.status = {status: STREAM_LISTENING, data: this.#candle};
+  }
+  get candle() {
+    return (this.#candle !== empty) ? this.#candle : null
+  }
+
+  /**
+   * add new candle to state data
+   *
+   * @param {object} data - t: timestamp, p: price, q: quantity
+   * @memberof Stream
+   */
+  newCandle(data) {
+    // let open = this.range.value()[C] || data.p
+
+    // create new stream candle
+    this.prevCandle();
+    // this.#candle = [data.t, open, data.p, data.p, open, data.q, null, true]
+    this.#candle = [data.t, data.p, data.p, data.p, data.p, data.q, null, true];
+    this.#core.mergeData({data: [this.#candle]}, true);
+    this.status = {status: STREAM_NEWVALUE, data: {data: data, candle: this.#candle}};
+  }
+
+  prevCandle() {
+    const d = this.#core.allData.data;
+    if (d.length > 0 && d[d.length - 1][7]) 
+          d[d.length - 1].pop();
+  }
+
+  /**
+   * update existing candle with current tick
+   *
+   * @param {object} data - t: timestamp, p: price, q: quantity
+   * @memberof Stream
+   */
+  updateCandle(data) {
+
+    data.p = parseFloat(data.p);
+    data.q = parseFloat(data.q);
+
+    // https://stackoverflow.com/a/52772191
+
+    let candle = this.#candle;
+    candle[H] = data.p > candle[H] ? data.p : candle[H];
+    candle[L] = data.p < candle[L] ? data.p : candle[L];
+    candle[C] = data.p;
+    candle[V] = parseFloat(candle[V] + data.q).toFixed(this.#precision);
+
+    // update the last candle in the state data
+    this.#candle = candle;
+
+    const d = this.#core.allData.data;
+    const l = (d.length > 0) ? d.length -1 : 0;
+    d[l] = this.#candle;
+  }
+
+}
+
 // core.js
 
 const STYLE_TXCHART = "overflow: hidden;";
@@ -9042,6 +11016,12 @@ const STYLE_MAIN  = "position: absolute; top: 0; height: 100%;";
 (async () => {
   await talib.init("node_modules/talib-web/lib/talib.wasm");
 })();
+
+/**
+ * The root class for the entire chart
+ * @export
+ * @class TradeXchart
+ */
 class TradeXchart {
 
 
@@ -9063,14 +11043,17 @@ class TradeXchart {
   #elMain
   #elRows
   #elTime
+  #elYAxis
   #elWidgetsG
 
   #inCnt = null
   #modID
   #state = {}
   #userClasses = []
+  #chartIsEmpty = true
   #data
   #range
+  #rangeStartTS
   #rangeLimit = RANGELIMIT
   #indicators = Indicators
   #TALib = talib
@@ -9086,8 +11069,8 @@ class TradeXchart {
   chartTxtColour = GlobalStyle.COLOUR_TXT
   chartBorderColour = GlobalStyle.COLOUR_BORDER
 
-  utilsH = 40
-  toolsW = 45
+  utilsH = 35
+  toolsW = 40
   timeH  = 50
   scaleW = 60
 
@@ -9120,7 +11103,7 @@ class TradeXchart {
   }
 
   logs = false
-  info = false
+  infos = false
   warnings = false
   errors = false
   
@@ -9129,14 +11112,27 @@ class TradeXchart {
   #smoothScrollOffset = 0
   #panBeginPos = [null, null, null, null]
 
+  #stream
+  #pricePrecision
+  #volumePrecision
+
+  #delayedSetRange = false
+
 
 /**
  * Creates an instance of TradeXchart.
- * @param {instance} mediator
- * @param {object} [options={}]
+ * @param {instance} mediator - module api
+ * @param {object}[options={}] - chart configuration
  * @memberof TradeXchart
  */
 constructor (mediator, options={}) {
+
+    this.oncontextmenu = window.oncontextmenu;
+
+    this.logs = (options?.logs) ? options.logs : false;
+    this.infos = (options?.infos) ? options.infos : false;
+    this.warnings = (options?.warnings) ? options.warnings : false;
+    this.errors = (options?.errors) ? options.errors : false;
 
     let container = options?.container,
         state = options?.state, 
@@ -9150,25 +11146,51 @@ constructor (mediator, options={}) {
         container = DOM.findBySelector(container);
     }
 
-    if (DOM.isElement(container)) {
+    if (!DOM.isElement(container)) 
+      this.error(`${NAME} cannot be mounted. Provided element does not exist in DOM`);
+    
+    else {
       this.#el = container;
       this.#mediator = mediator;
       this.#state = State.create(state, deepValidate, isCrypto);
       this.log(`Chart ${this.#id} created with a ${this.#state.status} state`);
       delete(options.state);
 
-      this.#time.timeFrame = this.#state.data.chart.tf; 
-      this.#time.timeFrameMS = this.#state.data.chart.tfms;
+      // time frame
+      let tf = "1s";
+      let ms = SECOND_MS;
+      if (!isObject(options?.stream) && this.#state.data.chart.data.length < 2) {
+        this.warning(`${NAME} has no chart data or streaming provided.`)
+        // has a time frame been provided?
+        ;({tf, ms} = isTimeFrame(options?.timeFrame));
+        this.#time.timeFrame = tf;
+        this.#time.timeFrameMS = ms;
+        this.#chartIsEmpty = true;
+      }
+      // is the chart streaming with an empty chart?
+      else if (isObject(options?.stream) && this.#state.data.chart.data.length < 2) {
+({tf, ms} = isTimeFrame(options?.timeFrame));
+        console.log("tf:",tf,"ms:",ms);
 
+        this.#time.timeFrame = tf;
+        this.#time.timeFrameMS = ms;
+        this.#chartIsEmpty = true;
+        this.#delayedSetRange = true;
+      }
+      // chart has back history and optionally streaming
+      else {
+        this.#time.timeFrame = this.#state.data.chart.tf; 
+        this.#time.timeFrameMS = this.#state.data.chart.tfms;
+        this.#chartIsEmpty = false;
+      }
       this.init(options);
     }
-    else this.error(`${NAME} cannot be mounted. Provided element does not exist in DOM`);
   }
 
-  log(l) { this.#mediator.log(l); }
-  info(i) { this.#mediator.info(i); }
-  warning(w) { this.#mediator.warn(w); }
-  error(e) { this.#mediator.error(e); }
+  log(l) { if (this.logs) console.log(l); }
+  info(i) { if (this.info) console.info(i); }
+  warning(w) { if (this.warnings) console.warn(w); }
+  error(e) { if (this.errors) console.error(e); }
 
   get id() { return this.#id }
   get name() { return this.#name }
@@ -9185,9 +11207,8 @@ constructor (mediator, options={}) {
 
   get elUtils() { return this.#elUtils }
   get elTools() { return this.#elTools }
-  // get elTime() { return this.#elTime }
   get elMain() { return this.#elMain }
-  // get elChart() { return this.#elChart }
+  get elYAxis() { return this.#elYAxis }
   get elWidgetsG() { return this.#elWidgetsG }
 
   get UtilsBar() { return this.#UtilsBar }
@@ -9201,7 +11222,14 @@ constructor (mediator, options={}) {
   get offChart() { return this.#state.data.offchart }
   get onChart() { return this.#state.data.onchart }
   get datasets() { return this.#state.data.datasets }
-
+  get allData() {
+    return {
+      data: this.chartData,
+      onChart: this.onChart,
+      offChart: this.offChart,
+      datasets: this.datasets
+    }
+  }
   get rangeLimit() { return (isNumber(this.#rangeLimit)) ? this.#rangeLimit : RANGELIMIT }
   get range() { return this.#range }
   get time() { return this.#time }
@@ -9221,21 +11249,28 @@ constructor (mediator, options={}) {
   get rangeScrollOffset() { return Math.floor(this.bufferPx / this.candleW) }
   get mousePos() { return this.#mousePos }
 
+  get pricePrecision() { return this.#pricePrecision }
+  get volumePrecision() { return this.#volumePrecision }
+
+  set stream(stream) { return this.setStream(stream) }
+  get stream() { return this.#stream }
+  get isEmtpy() { return this.#chartIsEmpty }
+
+
   /**
    * Create a new TradeXchart instance
    *
    * @static
-   * @param {DOM element} container
-   * @param {Object} [config={}]
-   * @param {Object} state
-   * @return {Instance}  
+   * @param {DOM_element} container - HTML element to mount the chart on
+   * @param {object} [config={}] - chart config
+   * @param {object} state - chart state
+   * @return {instance}  
    * @memberof TradeXchart
    */
   static create(container, config={}, state) {
     const cnt = ++TradeXchart.#cnt;
 
-    // config.cnt = cnt
-    // config.state = state
+    config.cnt = cnt;
     config.modID = `${ID}_${cnt}`;
     config.container = container;
 
@@ -9253,16 +11288,24 @@ constructor (mediator, options={}) {
     return instance
   }
 
+  /**
+   * Destroy a chart instance, clean up and remove data
+   * @static
+   * @param {instance} chart 
+   * @memberof TradeXchart
+   */
   static destroy(chart) {
     if (chart.constructor.name === "TradeXchart") {
+      chart.end();
       const inCnt = chart.inCnt;
       delete TradeXchart.#instances[inCnt];
     }
   }
 
   /**
-   * Target element has been validated as a mount point
+   * Target element has been validated as a mount point, 
    * let's start building
+   * @param {object} config - chart configuration
    */
   init(config) {
     this.#config = config;
@@ -9283,9 +11326,19 @@ constructor (mediator, options={}) {
       }
     }
 
-    const end = this.chartData.length - 1;
-    const start = end - this.#rangeLimit;
-    this.setRange(start, end);
+    // set default range
+    this.getRange(null, null, {interval: this.#time.timeFrameMS});
+
+    if (this.#range.Length > 1) {
+      // now set user defined (if any) range
+      const rangeStart = calcTimeIndex(this.#time, this.#rangeStartTS);
+      const end = (rangeStart) ? 
+        rangeStart + this.#rangeLimit :
+        this.chartData.length - 1;
+      const start = (rangeStart) ? rangeStart : end - this.#rangeLimit;
+      this.#rangeLimit = end - start;
+      this.setRange(start, end);
+    }
 
     // api - functions / methods, calculated properties provided by this module
     const api = {
@@ -9342,6 +11395,9 @@ constructor (mediator, options={}) {
     this.log(`${this.#name} instantiated`);
   }
 
+  /**
+   * Start the chart processing events and displaying data
+   */
   start() {
     this.log("...processing state");
 
@@ -9353,15 +11409,37 @@ constructor (mediator, options={}) {
     this.ToolsBar.start();
     this.MainPane.start();
     this.WidgetsG.start();
+
+    this.stream = this.#config.stream;
+
+    if (this.#delayedSetRange) 
+      this.on(STREAM_UPDATE, this.delayedSetRange.bind(this));
   }
 
+  /**
+   * Stop all chart event processing and remove the chart from DOM.
+   * In other words, destroy the chart.
+   */
   end() {
     this.log("...cleanup the mess");
-    removeEventListener('mousemove', this.onMouseMove);
+    this.#elTXChart.removeEventListener('mousemove', this.onMouseMove);
+
+    this.off(STREAM_UPDATE, this.onStreamUpdate);
+
+    this.UtilsBar.end();
+    this.ToolsBar.end();
+    this.MainPane.end();
+    this.WidgetsG.end();
+
+    this.#state = null;
+
+    DOM.findByID(this.id).remove;
   }
 
   eventsListen() {
     this.#elTXChart.addEventListener('mousemove', this.onMouseMove.bind(this));
+
+    this.on(STREAM_UPDATE, this.onStreamUpdate.bind(this));
   }
 
   on(topic, handler, context) {
@@ -9381,6 +11459,23 @@ constructor (mediator, options={}) {
     this.#mousePos.y = e.clientY;
   }
 
+  onStreamUpdate(candle) {
+    const r = this.range;
+    // is candle visible?
+    if (r.inRange(candle[0])) {
+      const max = r.priceMax; // * (1 - YAXIS_BOUNDS)
+      const min = r.priceMin; // * (1 + YAXIS_BOUNDS)
+      // is candle testing display boundaries?
+      if (candle[2] > max || candle[3] < min) {
+        // recalculate range
+        // TODO: instead of recalculate, update Range
+        this.setRange(r.indexStart, r.indexEnd);
+
+        this.emit("chart_yAxisRedraw", this.range);
+      }
+    }
+  }
+
   mount() {
     // mount the framework
     this.#el.innerHTML = this.defaultNode();
@@ -9391,6 +11486,7 @@ constructor (mediator, options={}) {
     this.#elBody = DOM.findBySelector(`#${this.id} .${CLASS_BODY}`);
     this.#elTools = DOM.findBySelector(`#${this.id} .${CLASS_TOOLS}`);
     this.#elMain  = DOM.findBySelector(`#${this.id} .${CLASS_MAIN}`);
+    this.#elYAxis  = DOM.findBySelector(`#${this.id} .${CLASS_YAXIS}`);
     this.#elRows  = DOM.findBySelector(`#${this.id} .${CLASS_ROWS}`);
     this.#elTime  = DOM.findBySelector(`#${this.id} .${CLASS_TIME}`);
     this.#elWidgetsG = DOM.findBySelector(`#${this.id} .${CLASS_WIDGETSG}`);
@@ -9407,15 +11503,6 @@ constructor (mediator, options={}) {
     };
   }
 
-  unmount() {
-    this.cleanup();
-  }
-
-  cleanup() {
-    // remove all event listeners
-    // destroy all objects
-  }
-
   props() {
     return {
       // id: (id) => this.setID(id),
@@ -9426,9 +11513,13 @@ constructor (mediator, options={}) {
       infos: (infos) => this.infos = (isBoolean(infos)) ? infos : false,
       warnings: (warnings) => this.warnings = (isBoolean(warnings)) ? warnings : false,
       errors: (errors) => this.errors = (isBoolean(errors)) ? errors : false,
+      rangeStartTS: (rangeStartTS) => this.#rangeStartTS = (isNumber(rangeStartTS)) ? rangeStartTS : undefined,
       rangeLimit: (rangeLimit) => this.#rangeLimit = (isNumber(rangeLimit)) ? rangeLimit : RANGELIMIT,
       indicators: (indicators) => this.#indicators = {...Indicators, ...indicators },
       theme: (theme) => this.setTheme(theme),
+      stream: (stream) => this.#stream = (isObject(stream)) ? stream : {},
+      pricePrecision: (precision) => this.setPricePrecision(precision),
+      volumePrecision: (precision) => this.setVolumePrecision(precision),
     }
   }
 
@@ -9445,7 +11536,6 @@ constructor (mediator, options={}) {
   getID() { return this.#id }
 
   getModID() { return this.#modID }
-
 
   setWidth(w) {
     if (isNumber(w))
@@ -9470,6 +11560,11 @@ constructor (mediator, options={}) {
     this.#elMain.style.height= `${this.#chartH - this.utilsH}px`;
   }
 
+  /**
+   * Set chart width and height
+   * @param {number} w - width in pixels
+   * @param {number} h - height in pixels
+   */
   setDimensions(w, h) {
     let width = this.width;
     let height = this.height;
@@ -9488,6 +11583,32 @@ constructor (mediator, options={}) {
     });
   }
 
+  /**
+ * Set the price accuracy
+ * @param {number} pricePrecision - Price accuracy
+ */
+    setPricePrecision (pricePrecision) {
+    if (!isNumber(pricePrecision) || pricePrecision < 0) {
+      pricePrecision = PRICE_PRECISION;
+    }
+    this.#pricePrecision = pricePrecision;
+  }
+
+  /**
+   * Set the volume accuracy
+   * @param {number} volumePrecision - Volume accuracy
+   */
+  setVolumePrecision (volumePrecision) {
+    if (!isNumber(volumePrecision) || volumePrecision < 0) {
+      volumePrecision = VOLUME_PRECISION;
+    }
+    this.#volumePrecision = volumePrecision;
+  }
+
+  /**
+   * Set the chart theme
+   * @param {object} volumePrecision - Volume accuracy
+   */
   setTheme(theme) {
     // TODO: validation
     this.#theme = theme;
@@ -9518,6 +11639,39 @@ constructor (mediator, options={}) {
     }
   }
 
+  setStream(stream) {
+    if (this.stream?.constructor.name == "Stream") {
+      this.error("Error: Invoke stopStream() before starting a new one.");
+      return false
+    }
+    else if (isObject(stream)) {
+      if (this.allData.data.length == 0 && isString(stream.timeFrame)) {
+({tf, ms} = isTimeFrame(stream?.timeFrame));
+        this.#time.timeFrame = tf;
+        this.#time.timeFrameMS = ms;
+      }
+      this.#stream = new Stream(this);
+      return this.#stream
+    }
+  }
+
+  stopStream() {
+    if (this.stream.constructor.name == "Stream") {
+      this.stream.stop();
+    }
+  }
+
+  delayedSetRange() {
+    while (this.#delayedSetRange) {
+      let r = this.range;
+      let l = Math.floor((r.indexEnd - r.indexStart) / 2);
+      this.setRange(l * -1, l);
+      this.off(STREAM_UPDATE, this.delayedSetRange);
+      this.#delayedSetRange = false;
+      this.refresh();
+    }
+  }
+
   defaultNode() {
 
     const classesTXChart = CLASS_DEFAULT+" "+this.#userClasses; 
@@ -9527,14 +11681,15 @@ constructor (mediator, options={}) {
     const styleTools = STYLE_TOOLS + ` width: ${this.toolsW}px; border-color: ${this.chartBorderColour};`;
     const styleMain = STYLE_MAIN + ` left: ${this.toolsW}px; width: calc(100% - ${this.toolsW}px);`;
     const styleWidgets = ` position: relative;`;
+    const styleScale = `position: absolute; top: 0; right: 0; width: ${this.scaleW}px; height: 100%;`;
     
     const node = `
       <div id="${this.id}" class="${classesTXChart}" style="${styleTXChart}">
         <div class="${CLASS_UTILS}" style="${styleUtils}"></div>
         <div class="${CLASS_BODY}" style="${styleBody}">
           <div class="${CLASS_TOOLS}" style="${styleTools}"></div>
-          <div class="${CLASS_MAIN}" style="${styleMain}">
-          </div>
+          <div class="${CLASS_MAIN}" style="${styleMain}"></div>
+          <div class="${CLASS_YAXIS}" style="${styleScale}"></div>
         </div>
         <div class="${CLASS_WIDGETSG}" style="${styleWidgets}"></div>
       </div>
@@ -9550,7 +11705,6 @@ constructor (mediator, options={}) {
    * Calculate new range index / position from position difference
    * typically mouse drag or cursor keys
    * @param {array} pos - [x2, y2, x1, y1, xdelta, ydelta]
-   * @returns 
    */
   updateRange(pos) {
 
@@ -9571,6 +11725,7 @@ constructor (mediator, options={}) {
     }
 
     this.#scrollPos = scrollPos;
+    console.log("scrollPos:",this.#scrollPos);
   }
 
   offsetRange(offset) {
@@ -9581,28 +11736,100 @@ constructor (mediator, options={}) {
   }
 
   /**
-   * set start and end of range
+   * initialize range
    * @param {number} start - index
    * @param {number} end - index
    */
-  setRange(start, end) {
-    const allData = {
-      data: this.chartData,
-      onChart: this.onChart,
-      offChart: this.offChart,
-      datasets: this.datasets
-    };
-    this.#range = getRange(allData, start, end);
+  // TODO: config from where?
+  getRange(start=0, end=0, config={}) {
+    this.#range = new Range(this.allData, start, end, config);
     this.#range.interval = this.#time.timeFrameMS;
     this.#range.intervalStr = this.#time.timeFrame;
     this.#time.range = this.#range;
   }
 
+  /**
+   * set start and end of range
+   * @param {number} start - index
+   * @param {number} end - index
+   */
+  setRange(start=0, end=this.rangeLimit) {
+    this.#range.set(start, end);
+  }
+
+  /**
+   * Merge a block of data into the chart state.
+   * Used for populating a chart with back history.
+   * Merge data must be formatted to a Chart State.
+   * Optionally set a new range upon merge.
+   * @param {object} merge - merge data must be formatted to a Chart State
+   * @param {boolean|object} newRange - false | {start: number, end: number}
+   */
+  // TODO: merge indicator data?
+  // TODO: merge dataset?
+  mergeData(merge, newRange=false) {
+    if (!isObject(merge)) return false
+
+    let i, j, start, end;
+    const data = this.allData.data;
+    const mData = merge?.data;
+    const inc = (this.range.inRange(mData[0][0])) ? 1 : 0;
+
+    if (isArray(mData) && mData.length > 0) {
+      i = mData.length - 1;
+      j = data.length - 1;
+
+      if (data.length == 0) this.allData.data.push(...mData);
+      else {
+        const r1 = [data[0][0], data[j][0]];
+        const r2 = [mData[0][0], mData[i][0]];
+        const o = [Math.max(r1[0], r2[0]), Math.min(r1[1], r2[1])];
+
+        // overlap between existing data and merge data
+        if (o[1] >= o[0]) ;
+        // no overlap, insert the new data
+        else {
+          this.allData.data.push(...mData);
+        }
+      }
+    }
+
+    if (newRange) {
+      if (isObject(newRange)) {
+        start = (isNumber(newRange.start)) ? newRange.start : this.range.indexStart;
+        end = (isNumber(newRange.end)) ? newRange.end : this.range.indexEnd;
+      }
+      else {
+        if (mData[0][0] )
+        start = this.range.indexStart + inc;
+        end = this.range.indexEnd + inc;
+      }
+      this.setRange(start, end);
+    }
+
+  }
+
+  /**
+   * Resize the chart
+   * @param {number} width - pixels
+   * @param {number} height - pixels
+   * @returns {boolean} - success or failure
+   */
   resize(width, height) {
     if (!isNumber(width) && !isNumber(height)) return false
 
     this.setDimensions(width, height);
     return true
+  }
+
+  refresh() {
+    this.MainPane.draw();
+    this.Chart.refresh();
+    const offCharts = this.MainPane.offCharts;
+    offCharts.forEach((offChart, key) => {
+      offChart.refresh();
+    });
+    // TODO: drawing tools
   }
 
   notImplemented() {
@@ -9616,6 +11843,8 @@ constructor (mediator, options={}) {
     }
     else this.implemented.open();
   }
+
+
 }
 
 export { TradeXchart as Chart, DOM };
