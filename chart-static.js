@@ -1,8 +1,8 @@
 import { Chart, DOM } from './tradex-chart.es.js'
 // import './chart-live.css'
 
-// import state from './data/1hour.json'
-import state from './data/seconds.json'
+import state from './data/1hour.js'
+// import state from './data/1minute.js'
 
 
 DOM.findBySelector('#app').innerHTML = `
@@ -20,12 +20,33 @@ const config = {
   title: "BTC/USDT",
   width: 1000,
   height: 800,
-  // rangeStartTS: 1558429200000, // 21/05/2019, 11:00:00 - 1 hour price
-  rangeStartTS: 1663059600000, // seconds price
+  utils: {none: true},
+  tools: {none: true},
+  rangeStartTS: 1558429200000, // 21/05/2019, 11:00:00 - 1 hour price
+  // rangeStartTS: 1663059600000, // seconds price
   rangeLimit: 30,
   theme: {
-    candleType: "CANDLE_SOLID",
-    onchartVolumeH: 15,
+    candle: {
+      Type: "candle_down_hollow",
+      UpBodyColour: "#FAEB2488",
+      UpWickColour: "#FAEB24",
+      DnBodyColour: "#F900FE88",
+      DnWickColour: "#F900FE",
+    },
+    volume: {
+      Height: 15,
+      UpColour: "#FAEB2444",
+      DnColour: "#F900FE44",
+    },
+    chart: {
+      Background: "#141414",
+      BorderColour: "#666",
+      GridColour: "#333",
+      TextColour: "#ccc"
+    },
+    onChart: {
+
+    },
   },
   isCrypto: true,
   logs: false,

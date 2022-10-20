@@ -1,4 +1,4 @@
-import * as talib from './node_modules/talib-web/lib/index.esm.js';
+import * as talib from './talib-web/lib/index.esm.js';
 
 // DOM.js
 // DOM utilities
@@ -190,7 +190,7 @@ const DOM = {
 };
 
 /**
- * @param value
+ * @param {*} value
  * @return {boolean}
  */
  function isArray (value) {
@@ -217,7 +217,7 @@ function isObject (value) {
 }
 
 /**
- * @param value
+ * @param {*} value
  * @returns {boolean}
  */
 function isNumber (value) {
@@ -225,7 +225,7 @@ function isNumber (value) {
 }
 
 /**
- * @param value
+ * @param {*} value
  * @returns {boolean}
  */
 function isBoolean (value) {
@@ -233,7 +233,7 @@ function isBoolean (value) {
 }
 
 /**
- * @param value
+ * @param {*} value
  * @return {boolean}
  */
 function isString (value) {
@@ -915,6 +915,7 @@ const GlobalStyle = {
   COLOUR_BG: "#141414",
   COLOUR_BORDER: "#666",
   COLOUR_TXT: "#CCC",
+  BORDER_THICKNESS: 0,
 };
 
 const ToolsStyle = {
@@ -937,6 +938,18 @@ const WindowStyle = {
   COLOUR_TXT: "#CCC",
 };
 
+/**
+* Candlesticks
+*/
+const CandleType = {
+  CANDLE_SOLID: 'candle_solid',
+  CANDLE_HOLLOW: 'candle_hollow',
+  CANDLE_UP_HOLLOW: 'candle_up_hollow',
+  CANDLE_DOWN_HOLLOW: 'candle_down_hollow',
+  OHLC: 'ohlc',
+  AREA: 'area'
+};
+
 const CandleStyle = {
   COLOUR_CANDLE_UP: "#00F04088",
   COLOUR_CANDLE_DN: "#F0004088",
@@ -946,8 +959,8 @@ const CandleStyle = {
 };
 
 const VolumeStyle = {
-  COLOUR_VOLUME_UP: "#00F04088",
-  COLOUR_VOLUME_DN: "#F0004088",
+  COLOUR_VOLUME_UP: "#00F04044",
+  COLOUR_VOLUME_DN: "#F0004044",
   ONCHART_VOLUME_HEIGHT: 15,
 };
 
@@ -989,6 +1002,32 @@ const PriceLineStyle = {
   lineWidth: 1,
   strokeStyle: "#ccc",
   lineDash: [1,1]
+};
+
+const defaultTheme = {
+  candle: {
+    Type: CandleType.CANDLE_SOLID,
+    UpBodyColour: CandleStyle.COLOUR_CANDLE_UP,
+    UpWickColour: CandleStyle.COLOUR_WICK_UP,
+    DnBodyColour: CandleStyle.COLOUR_CANDLE_DN,
+    DnWickColour: CandleStyle.COLOUR_WICK_DN,
+  },
+  volume: {
+    Height: VolumeStyle.ONCHART_VOLUME_HEIGHT,
+    UpColour: VolumeStyle.COLOUR_VOLUME_UP,
+    DnColour: VolumeStyle.COLOUR_VOLUME_DN,
+  },
+  chart: {
+    Background: GlobalStyle.COLOUR_BG,
+    BorderColour: GlobalStyle.COLOUR_BORDER,
+    BorderThickness: GlobalStyle.BORDER_THICKNESS,
+    TextColour: GlobalStyle.COLOUR_TXT,
+    GridColour: GridStyle.COLOUR_GRID,
+  },
+  onChart: {
+
+  },
+  maxVolumeH: VolumeStyle.ONCHART_VOLUME_HEIGHT,
 };
 
 const NAME = "TradeX-Chart";
@@ -1116,12 +1155,12 @@ var utilsList = [
 
 /**
  * Filled rectangle
- * @param ctx
- * @param style
- * @param x
- * @param y
- * @param width
- * @param height
+ * @param {object} ctx - canvas reference
+ * @param {string} style - CSS colour format
+ * @param {number} x - canvas pixel position
+ * @param {number} y - canvas pixel position
+ * @param {number} width - pixel distance
+ * @param {number} height - pixel distance
  */
 function renderFillRect (ctx, x, y, width, height, style) {
   ctx.fillStyle = style;
@@ -1131,11 +1170,12 @@ function renderFillRect (ctx, x, y, width, height, style) {
 // path.js
 /**
  * Draw a path
- * @param ctx
- * @param coordinates
- * @param strokeFill
+ * @param {object} ctx - canvas reference
+ * @param {array} coords - array of x y coords [{x:x, y:y}, ...]
+ * @param {object} style - {lineWidth, strokeStyle, lineDash}
+ * @param {function} strokeFill
  */
-function renderPath (ctx, coordinates, style, strokeFill) {
+function renderPath (ctx, coords, style, strokeFill) {
   ctx.save();
   ctx.lineWidth = style.lineWidth || 1;
   if (ctx.lineWidth % 2) {
@@ -1147,13 +1187,13 @@ function renderPath (ctx, coordinates, style, strokeFill) {
   
   ctx.beginPath();
   let move = true;
-  coordinates.forEach(coordinate => {
-    if (coordinate && coordinate.x !== null) {
+  coords.forEach(coord => {
+    if (coord && coord.x !== null) {
       if (move) {
-        ctx.moveTo(coordinate.x, coordinate.y);
+        ctx.moveTo(coord.x, coord.y);
         move = false;
       } else {
-        ctx.lineTo(coordinate.x, coordinate.y);
+        ctx.lineTo(coord.x, coord.y);
       }
     }
   });
@@ -1165,14 +1205,14 @@ function renderPath (ctx, coordinates, style, strokeFill) {
 
 /**
  * Draw a horizontal straight line
- * @param ctx
- * @param y
- * @param left
- * @param right
+ * @param {object} ctx - canvas reference
+ * @param {number} y - canvas pixel position
+ * @param {number} left - canvas pixel position
+ * @param {number} right - canvas pixel position
  */
 function renderHorizontalLine (ctx, y, left, right, style) {
-  const coordinates = [{x:left, y:y}, {x:right, y:y}];
-  renderPath(ctx, coordinates, style, () => {
+  const coords = [{x:left, y:y}, {x:right, y:y}];
+  renderPath(ctx, coords, style, () => {
     ctx.stroke();
     ctx.closePath();
   });
@@ -1180,11 +1220,11 @@ function renderHorizontalLine (ctx, y, left, right, style) {
 
 /**
  * Render line - open path
- * @param ctx
- * @param coordinates
+ * @param {object} ctx - canvas reference
+ * @param {array} coords - array of x y coords [{x:x, y:y}, ...]
  */
-function renderLine (ctx, coordinates, style) {
-  renderPath(ctx, coordinates, style, () => {
+function renderLine (ctx, coords, style) {
+  renderPath(ctx, coords, style, () => {
     ctx.stroke();
     ctx.closePath();
   });
@@ -1486,8 +1526,12 @@ class DMI extends indicator {
 
 // number.js
 
-// Getting a random integer between two values
-// inclusive of the minimum, exclusive of the maximum
+/** 
+ * Getting a random integer between two values
+ * inclusive of the minimum, exclusive of the maximum
+ * @export
+ * @return {number}
+ */
 function getRandomIntBetween(min, max) {
   min = Math.ceil(min) + 1;
   max = Math.floor(max);
@@ -1496,8 +1540,6 @@ function getRandomIntBetween(min, max) {
 }
 
 /**
- *
- *
  * @export
  * @param {number} value
  * @return {number}  
@@ -1516,8 +1558,8 @@ function countDigits(value) {
  * count integer digits
  * bitwise operations in JavaScript only work with 32-bit values (so a max of 2,147,483,647)
  * @export
- * @param {Number} value
- * @return {Number}  
+ * @param {number} value
+ * @return {number}  
  */
 function numDigits(value) {
   return (Math.log10((value ^ (value >> 31)) - (value >> 31)) | 0) + 1;
@@ -1526,8 +1568,8 @@ function numDigits(value) {
 /**
  * truncate floating point, works for positives as well as negatives
  * @export
- * @param {Number} value
- * @return {Number}  
+ * @param {number} value
+ * @return {number}  
  */
 function float2Int(value) {
   return value | 0
@@ -1536,8 +1578,9 @@ function float2Int(value) {
 
 /**
  * round to precision - fastest
- * @param value
- * @param precision
+ * @export
+ * @param {number} n
+ * @param {number} p
  * @return {number}
  */
  function round (n, p) {
@@ -1565,22 +1608,30 @@ function precision(value) {
 
 /**
  * log base 10
- * @param value
+ * @export
+ * @param {number} value
  * @return {number}
  */
 function log10 (value) {
   return Math.log(value) / Math.log(10)
 }
 
+/**
+ * Exponential power
+ * @export
+ * @param {number} value
+ * @return {number}
+ */
 function power (base, exponent) {
   return Math.pow(base, exponent)
 }
 
 /**
- * limit number to a range
- * @param {number} val
- * @param {number} min
- * @param {number} max
+ * Limit number to a range between max and min
+ * @export
+ * @param {number} val - value to be bounded
+ * @param {number} min - lower bound
+ * @param {number} max - upper bound
  * @return {number}  
  */
 function limit(val, min, max) {
@@ -4100,6 +4151,11 @@ class ToolsBar {
 
 // axis.js
 
+/**
+ * Parent class that xAxis and yAxis extend
+ * @export
+ * @class Axis
+ */
 class Axis {
 
   #core
@@ -4446,6 +4502,10 @@ class xAxis extends Axis {
     return grads
   }
 
+  gradsWorker() {
+    
+  }
+
   HM(t) {
     let h = String(get_hour(t)).padStart(2, '0');
     let m = String(get_minute(t)).padStart(2, '0');
@@ -4564,8 +4624,8 @@ class Viewport {
   }
   /**
    * get key's associated coordinate - applied to mouse events.
-   * @param {Number} x
-   * @param {Number} y
+   * @param {number} x
+   * @param {number} y
    * @returns {Integer} integer - returns -1 if no pixel is there
    */
   getIntersection(x, y) {
@@ -4671,8 +4731,8 @@ class Layer {
 
   /**
    * set layer position
-   * @param {Number} x
-   * @param {Number} y
+   * @param {number} x
+   * @param {number} y
    * @returns {Layer}
    */
   setPosition(x, y) {
@@ -4682,8 +4742,8 @@ class Layer {
   }
   /**
    * set layer size
-   * @param {Number} width
-   * @param {Number} height
+   * @param {number} width
+   * @param {number} height
    * @returns {Layer}
    */
   setSize(width, height) {
@@ -4805,8 +4865,8 @@ class Scene {
 
   /**
    * set scene size
-   * @param {Number} width
-   * @param {Number} height
+   * @param {number} width
+   * @param {number} height
    * @returns {Scene}
    */
   setSize(width, height) {
@@ -4846,7 +4906,7 @@ class Scene {
   /**
    * convert scene into an image
    * @param {String} type - type of image format
-   * @param {Number} quality - image quality 0 - 1
+   * @param {number} quality - image quality 0 - 1
    * @param {Function} cb - callback
    */
   toImage(type = "image/png", quality, cb) {
@@ -4866,7 +4926,7 @@ class Scene {
    * @param {Object} cfg - {filename}
    * @param {Function} cb - optional, by default opens image in new window / tab
    * @param {String} type - type of image format
-   * @param {Number} quality - image quality 0 - 1
+   * @param {number} quality - image quality 0 - 1
    */
   export(cfg, cb, type = "image/png", quality) {
     if (typeof cb !== "function") cb = this.blobCallback.bind({ cfg: cfg });
@@ -4925,8 +4985,8 @@ class Hit {
 
   /**
    * set hit size
-   * @param {Number} width
-   * @param {Number} height
+   * @param {number} width
+   * @param {number} height
    * @returns {Hit}
    */
   setSize(width, height) {
@@ -4960,8 +5020,8 @@ class Hit {
   }
   /**
    * get key associated with coordinate. This can be used for mouse interactivity.
-   * @param {Number} x
-   * @param {Number} y
+   * @param {number} x
+   * @param {number} y
    * @returns {Integer} integer - returns -1 if no pixel is there
    */
   getIntersection(x, y) {
@@ -5006,7 +5066,7 @@ class Hit {
   }
   /**
    * get canvas formatted color string from data index
-   * @param {Number} index
+   * @param {number} index
    * @returns {String}
    */
   getColorFromIndex(index) {
@@ -5026,7 +5086,7 @@ class Hit {
   }
   /**
    * converts integer value to rgb array
-   * @param {Number} number - positive number between 0 and 256*256*256 = 16,777,216
+   * @param {number} number - positive number between 0 and 256*256*256 = 16,777,216
    * @returns {Array}
    */
   intToRGB(number) {
@@ -5534,6 +5594,7 @@ class yAxis extends Axis {
   #source
   #parent
   #chart
+  #core
 
   #yAxisType = YAXIS_TYPES[0]  // default, log, percent
   #yAxisPadding = 1.04
@@ -5546,14 +5607,16 @@ class yAxis extends Axis {
 
   constructor(parent, chart, yAxisType=YAXIS_TYPES[0]) {
     super(parent, chart);
+    this.#core = parent.mediator.api.core;
     this.#chart = chart;
     this.#parent = parent;
     this.#source = parent.parent;
     this.yAxisType = yAxisType;
-    this.#yAxisGrid = (this.#parent.core.config?.yAxisGrid) ? 
-      this.#parent.core.config?.yAxisGrid : YAXIS_GRID;
+    this.#yAxisGrid = (this.core.config?.yAxisGrid) ? 
+      this.core.config?.yAxisGrid : YAXIS_GRID;
   }
 
+  get core() { return this.#core }
   get chart() { return this.#chart }
   get data() { return this.chart.data }
   get range() { return this.#parent.mediator.api.core.range }
@@ -5570,6 +5633,7 @@ class yAxis extends Axis {
   set yAxisTicks(t) { this.#yAxisTicks = isNumber(t) ? t : 0; }
   get yAxisTicks() { return this.#yAxisTicks }
   get yAxisGrads() { return this.#yAxisGrads }
+  get theme() { return this.core.theme }
 
   calcHeight() {
     let api = this.#chart.mediator.api;
@@ -5967,6 +6031,7 @@ var stateMachineConfig$4 = {
 class scalePriceLine {
 
   #core
+  #theme
   #config
   #scale
   #target
@@ -5980,6 +6045,7 @@ class scalePriceLine {
     this.#config = config;
     this.#scale = scale;
     this.#core = scale.core;
+    this.#theme = scale.core.theme;
 
     this.start();
   }
@@ -6036,8 +6102,8 @@ class scalePriceLine {
     ctx.save();
 
     // TODO: get candle colours from config / theme
-    if (candle[4] >= candle[1]) options.bakCol = CandleStyle.COLOUR_CANDLE_UP;
-    else options.bakCol = CandleStyle.COLOUR_CANDLE_DN;
+    if (candle[4] >= candle[1]) options.bakCol = this.#theme.candle.UpBodyColour;
+    else options.bakCol = this.#theme.candle.DnBodyColour;
 
     ctx.fillStyle = options.bakCol;
     ctx.fillRect(1, yPos, this.width, height);
@@ -6577,7 +6643,7 @@ class chartGrid {
     const xGrads = this.#xAxis.xAxisGrads.values;
     const ctx = this.#scene.context;
     ctx.save();
-    ctx.strokeStyle = GridStyle.COLOUR_GRID;
+    ctx.strokeStyle = this.#core.theme.chart.GridColour || GridStyle.COLOUR_GRID;
 
     // X Axis
     if (axes != "y") {
@@ -6609,22 +6675,19 @@ class chartGrid {
 
 // volume.js
 
-
 class VolumeBar {
 
   constructor(scene, config) {
     this.scene = scene;
     this.ctx = this.scene.context;
     this.width = this.scene.width;
-    this.cfg = config;
-    this.cfg.colourVolumeUp = this.cfg?.colourVolumeUp || VolumeStyle.COLOUR_VOLUME_UP;
-    this.cfg.colourVolumeDn = this.cfg?.colourVolumeDn || VolumeStyle.COLOUR_VOLUME_DN;
+    this.cfg = {...defaultTheme, ...config};
   }
 
   draw(data) {
     const ctx = this.ctx;
     const hilo = data.raw[4] >= data.raw[1];
-    const barColour = hilo ? this.cfg.colourVolumeUp : this.cfg.colourVolumeDn;
+    const barColour = hilo ? this.cfg.volume.UpColour: this.cfg.volume.DnColour;
 
     ctx.save();
     ctx.strokeStyle = barColour;
@@ -6711,32 +6774,27 @@ class Candle {
     this.scene = scene;
     this.ctx = this.scene.context;
     this.width = this.scene.width;
-    this.cfg = config;
-    this.cfg.candleType = this.cfg?.candleType || "CANDLE_SOLID";
-    this.cfg.colourCandleUp = this.cfg?.colourCandleUp || CandleStyle.COLOUR_CANDLE_UP;
-    this.cfg.colourCandleDn = this.cfg?.colourCandleDn || CandleStyle.COLOUR_CANDLE_DN;
-    this.cfg.colourWickUp = this.cfg?.colourWickUp || CandleStyle.COLOUR_WICK_UP;
-    this.cfg.colourWickDn = this.cfg?.colourWickDn || CandleStyle.COLOUR_WICK_DN;
+    this.cfg = {...defaultTheme.candle, ...config};
   }
 
   draw(data) {
     const ctx = this.ctx;
     const hilo = data.raw[4] >= data.raw[1];
-    const bodyColour = hilo ? this.cfg.colourCandleUp : this.cfg.colourCandleDn;
-    const wickColour = hilo ? this.cfg.colourWickUp : this.cfg.colourWickDn;
+    const bodyColour = hilo ? this.cfg.candle.UpBodyColour : this.cfg.candle.DnBodyColour;
+    const wickColour = hilo ? this.cfg.candle.UpWickColour : this.cfg.candle.DnWickColour;
 
-    switch(this.cfg?.candleType) {
-      case "CANDLE_SOLID": 
+    switch(this.cfg.candle.Type) {
+      case CandleType.CANDLE_SOLID :
       this.fill = true;
       break;
-      case "CANDLE_HOLLOW":
+      case CandleType.CANDLE_HOLLOW :
       case "OHLC":
         this.fill = false;
         break;
-      case "CANDLE_UP_HOLLOW":
+      case CandleType.CANDLE_UP_HOLLOW :
         this.fill = !hilo;
         break;
-      case "CANDLE_DOWN_HOLLOW":
+      case CandleType.CANDLE_DOWN_HOLLOW :
         this.fill = hilo;
       // default:
       //   this.fill = true
@@ -6757,7 +6815,7 @@ class Candle {
     ctx.moveTo(x05, Math.floor(data.h));
 
     // Wicks
-    if (this.cfg.candleType === "OHLC") {
+    if (this.cfg.candle.Type === "OHLC") {
       ctx.lineTo(x05, Math.floor(data.l));
     }
     else {
@@ -6788,7 +6846,7 @@ class Candle {
       ctx.fill();
       ctx.stroke();
     } 
-    else if (data.w > 1.5 && !this.fill && this.cfg.candleType !== "OHLC") {
+    else if (data.w > 1.5 && !this.fill && this.cfg.candle.Type !== "OHLC") {
       let s = hilo ? 1 : -1;
       ctx.rect(
         Math.floor(x - hw -1),
@@ -6798,7 +6856,7 @@ class Candle {
       );
       ctx.stroke();
     } 
-    else if (this.cfg.candleType === "OHLC") {
+    else if (this.cfg.candle.Type === "OHLC") {
       // ctx.strokeStyle = wickColour
       ctx.beginPath();
       ctx.moveTo(x05 - hw, data.o);
@@ -6878,7 +6936,7 @@ class chartCandles extends Candle {
   draw(range=this.#core.range) {
     this.#scene.clear();
 
-    const render = (this.#config.CandleType === "AREA") ?
+    const render = (this.#core.theme.candle.Type === CandleType.AREA) ?
       (candle) => {} :
       (candle) => {super.draw(candle);};
     const offset = this.#xAxis.smoothScrollOffset || 0;
@@ -6912,7 +6970,7 @@ class chartCandles extends Candle {
       candle.x = candle.x + candle.w;
     }
 
-    if (this.#config.CandleType === "AREA") super.areaRender();
+    if (this.#core.theme.candle.Type === CandleType.AREA) super.areaRender();
   }
 
 }
@@ -6947,7 +7005,7 @@ class chartStreamCandle extends Candle {
     this.#scene.clear();
 
     const r = this.#core.range;
-    const render = (this.#config.CandleType === "AREA") ?
+    const render = (this.#core.theme.candle.Type === CandleType.AREA) ?
       (candle) => {} :
       (candle) => {super.draw(candle);};
     this.#xAxis.smoothScrollOffset || 0;
@@ -6965,12 +7023,12 @@ class chartStreamCandle extends Candle {
     if (r.inRange(stream[0])) {
       render(candle);
 
-      if (this.#config.CandleType === "AREA") super.areaRender();
+      if (this.#core.theme.candle.Type === CandleType.AREA) super.areaRender();
     }
 
 
-    if (stream[4] >= stream[1]) this.#config.priceLineStyle.strokeStyle = CandleStyle.COLOUR_CANDLE_UP;
-    else this.#config.priceLineStyle.strokeStyle = CandleStyle.COLOUR_CANDLE_DN;
+    if (stream[4] >= stream[1]) this.#config.priceLineStyle.strokeStyle = this.#core.theme.candle.UpBodyColour;
+    else this.#config.priceLineStyle.strokeStyle = this.#core.theme.candle.DnBodyColour;
 
     // draw price line 
     renderHorizontalLine (
@@ -7267,6 +7325,7 @@ class Chart {
     this.#elScale = mediator.api.elements.elChartScale;
     this.#parent = {...this.#mediator.api.parent};
     this.#core = this.#mediator.api.core;
+    this.#theme = this.#core.theme;
     this.#onChart = this.#mediator.api.onChart;
 
     this.#settings = this.#mediator.api.settings;
@@ -7358,7 +7417,11 @@ class Chart {
     this.log(`${this.#name} instantiated`);
   }
 
-
+  /**
+   * Start chart and dependent components event listening. 
+   * Start the chart state machine
+   * Draw the chart
+   */
   start() {
 
     // X Axis - Timeline
@@ -7418,14 +7481,30 @@ class Chart {
     this.on("chart_yAxisRedraw", this.onYAxisRedraw.bind(this));
   }
 
+  /**
+   * Set a custom event listener
+   * @param {string} topic 
+   * @param {function} handler 
+   * @param {*} context 
+   */
   on(topic, handler, context) {
     this.#mediator.on(topic, handler, context);
   }
 
+  /**
+   * Remove a custom event listener
+   * @param {string} topic 
+   * @param {function} handler 
+   */
   off(topic, handler) {
     this.#mediator.off(topic, handler);
   }
 
+  /**
+   * Emit an event with optional data
+   * @param {string} topic 
+   * @param {*} data 
+   */
   emit(topic, data) {
     this.#mediator.emit(topic, data);
   }
@@ -7510,7 +7589,6 @@ class Chart {
       // id: (id) => this.setID(id),
       title: (title) => this.#title = title,
       yAxisDigits: (digits) => this.setYAxisDigits(digits),
-      theme: (theme) => this.setTheme(theme),
     }
   }
 
@@ -7530,6 +7608,10 @@ class Chart {
     this.#Scale.setDimensions({w: null, h: h});
   }
 
+  /**
+   * Set chart dimensions
+   * @param {object} dim - dimensions {w:width, h: height}
+   */
   setDimensions(dim) {
     const buffer = this.config.buffer || BUFFERSIZE$1;
     const width = dim.w - this.#elScale.clientWidth;
@@ -7542,7 +7624,7 @@ class Chart {
     // TODO: iterate layersOnChart and setSize()
     // this.#layersOnChart.setSize(layerWidth, height)
     this.#layerCandles.setSize(layerWidth, height);
-    this.#layerStream.setSize(layerWidth, height);
+    if (this.#Stream) this.#layerStream.setSize(layerWidth, height);
     this.#layerCursor.setSize(width, height);
 
     this.setWidth(dim.w);
@@ -7550,10 +7632,6 @@ class Chart {
     this.#Scale.resize(dim.w, dim.h);
 
     this.draw(undefined, true);
-  }
-
-  setTheme(theme) {
-    this.#theme = theme;
   }
 
   setYAxisDigits(digits) {
@@ -7659,8 +7737,7 @@ class Chart {
         this.#Time, 
         this.#Scale, 
         this.#theme);
-
-    this.#theme.maxVolumeH = this.#theme?.onchartVolumeH || VolumeStyle.ONCHART_VOLUME_HEIGHT;
+    this.#theme.maxVolumeH = this.#theme?.volume?.Height || VolumeStyle.ONCHART_VOLUME_HEIGHT;
     this.#chartVolume =
       new chartVolume(
         this.#layerVolume, 
@@ -7784,7 +7861,7 @@ class Chart {
     this.#layerCandles.setPosition(this.#core.scrollPos, 0);
     if (this.#layerStream) {
       this.#layerStream.setPosition(this.#core.scrollPos, 0);
-      this.#core.stream.lastScrollPos = this.#core.scrollPos;
+    this.#core.stream.lastScrollPos = this.#core.scrollPos;
     }
 
     if (this.scrollPos == this.bufferPx * -1 || 
@@ -7805,22 +7882,35 @@ class Chart {
 
   }
   
+  /**
+   * Refresh the entire chart
+   */
   refresh() {
     this.#Scale.draw();
     this.draw(this.range, true);
   }
 
+  /**
+   * Return the screen x position for a give time stamp
+   * @param {number} time - timestamp
+   * @returns {number} - x position on canvas
+   */
   time2XPos(time) {
     return this.#Time.xPos(time)
   }
 
+  /**
+   * 
+   * @param {number} price 
+   * @returns {number} - y position on canvas
+   */
   price2YPos(price) {
     return this.#Scale.yPos(price)
   }
 
   /**
    * Set the price accuracy
-   * @param pricePrecision - Price accuracy
+   * @param {number} pricePrecision - Price accuracy
    */
   setPriceVolumePrecision (pricePrecision) {
     if (!isNumber(pricePrecision) || pricePrecision < 0) {
@@ -7832,7 +7922,7 @@ class Chart {
 
   /**
    * Set the volume accuracy
-   * @param volumePrecision - Volume accuracy
+   * @param {number}volumePrecision - Volume accuracy
    */
   setPriceVolumePrecision (volumePrecision) {
     if (!isNumber(volumePrecision) || volumePrecision < 0) {
@@ -7842,6 +7932,11 @@ class Chart {
     this.#volumePrecision = volumePrecision;
   }
 
+  /**
+   * Update chart and indicator legends
+   * @param {array} pos - cursor position x, y, defaults to current cursor position
+   * @param {array} candle - OHLCV
+   */
   updateLegends(pos=this.#cursorPos, candle=false) {
 
     const legends = this.#Legends.list;
@@ -7852,8 +7947,8 @@ class Chart {
     if (this.#Stream && ohlcv[4] === null) ohlcv = candle;
 
     // TODO: get candle colours from config / theme
-    if (ohlcv[4] >= ohlcv[1]) colours = new Array(5).fill(CandleStyle.COLOUR_WICK_UP);
-    else colours = new Array(5).fill(CandleStyle.COLOUR_WICK_DN);
+    if (ohlcv[4] >= ohlcv[1]) colours = new Array(5).fill(this.theme.candle.UpWickColour);
+    else colours = new Array(5).fill(this.theme.candle.DnWickColour);
 
     inputs.O = this.#Scale.nicePrice(ohlcv[1]);
     inputs.H = this.#Scale.nicePrice(ohlcv[2]);
@@ -7877,6 +7972,7 @@ class Chart {
 
   /**
    * Zoom (contract or expand) range start
+   * emits: "chart_zoomDone"
    * @param {array} data - [newStart, newEnd, oldStart, oldEnd, inOut]
    */
   zoomRange(data) {
@@ -7889,6 +7985,11 @@ class Chart {
     this.emit("chart_zoomDone");
   }
 
+  /**
+   * Set the entire chart dimensions, this will cascade and resize components
+   * @param {number} width - width in pixels, defaults to current width
+   * @param {number} height - height in pixels, defaults to current height
+   */
   resize(width=this.width, height=this.height) {
     // adjust element, viewport and layers
     this.setDimensions({w: width, h: height});
@@ -8142,6 +8243,7 @@ class OffChart {
     this.#parent = {...this.mediator.api.parent};
     this.#overlay = options.offChart;
     this.#core = this.mediator.api.core;
+    this.#theme = this.#core.theme;
 
     this.#options = options;
     this.#ID = this.#options.offChartID || uid("TX_OC_");
@@ -8358,7 +8460,6 @@ class OffChart {
       // id: (id) => this.setID(id),
       title: (title) => this.#title = title,
       yAxisDigits: (digits) => this.setYAxisDigits(digits),
-      theme: (theme) => this.setTheme(theme),
     }
   }
 
@@ -8394,10 +8495,6 @@ class OffChart {
     this.#Scale.resize(dim.w, dim.h);
 
     this.draw(undefined, true);
-  }
-
-  setTheme(theme) {
-    this.#theme = theme;
   }
 
   setCursor(cursor) {
@@ -10445,11 +10542,12 @@ function isValidCandle(c, isCrypto=false) {
 }
 
 // range.js
+// import WebWorker from "./webWorkers"
+// import WebWorker from "./webWorkers4"
 
 class Range {
 
   data
-  // dataLength
   #interval = DEFAULT_TIMEFRAMEMS
   #intervalStr = "1s"
   indexStart = 0
@@ -10470,15 +10568,29 @@ class Range {
     min: 0,
     factor: 1
   }
+  #core
+  #worker
+  #init = true
 
   constructor( allData, start=0, end=allData.data.length-1, config={}) {
     if (!isObject(allData)) return false
     if (!isObject(config)) return false
+    if (!(config?.core?.constructor.name == "TradeXchart")) return false
 
+    this.#init = true;
     this.limitFuture = (isNumber(this.config?.limitFuture)) ? this.config.limitFuture : LIMITFUTURE;
     this.limitPast = (isNumber(this.config?.limitPast)) ? this.config.limitPast : LIMITPAST;
     this.minCandles = (isNumber(this.config?.limitCandles)) ? this.config.limitCandles : MINCANDLES;
     this.yAxisBounds = (isNumber(this.config?.limitBounds)) ? this.config.limitBounds : YAXIS_BOUNDS;
+    this.#core = config.core;
+
+    const MaxMinPriceVolStr = `
+    (input) => {
+      return maxMinPriceVol(input)
+    }
+    function ${this.maxMinPriceVol.toString()}
+  `;
+    this.#worker = this.#core.worker.create("range", MaxMinPriceVolStr, undefined, this.#core);
 
     const tf = config?.interval || DEFAULT_TIMEFRAMEMS;
 
@@ -10498,7 +10610,6 @@ class Range {
       end = this.rangeLimit;
     else if (end == 0)
       end = allData.data.length;
-
     
     for (let data in allData) {
       this[data] = allData[data];
@@ -10527,6 +10638,10 @@ class Range {
   set mode (m) { this.setMode(m); }
   get mode () { return this.#rangeMode }
 
+  end() {
+    WebWorker.destroy(this.#worker.ID);
+  }
+
   set (start=0, end=this.dataLength) {
     if (!isNumber(start) || 
         !isNumber(end)) return false
@@ -10545,18 +10660,32 @@ class Range {
     this.indexStart = start;
     this.indexEnd = end;
 
-    let maxMin = this.maxMinPriceVol(this.data, this.indexStart, this.indexEnd);
+    if (this.#init) {
+      this.#init = false;
+      let maxMin = this.maxMinPriceVol({data: this.data, start: this.indexStart, end: this.indexEnd, that: this});
+      
+      this.setMaxMin(maxMin);
 
+      return true
+    }
+
+    // use web worker after init
+    this.#worker.postMessage({data: this.data, start: start, end: end, that: this})
+    .then(maxMin => {
+      this.setMaxMin(maxMin);
+    });
+
+    return true
+  }
+
+  setMaxMin(maxMin) {
     if (this.#rangeMode = "manual") ;
-
     for (let m in maxMin) {
       this[m] = maxMin[m];
     }
     this.height = this.priceMax - this.priceMin;
     this.volumeHeight = this.volumeMax - this.volumeMin;
     this.scale = (this.dataLength != 0) ? this.Length / this.dataLength : 1;
-
-    return true
   }
 
   setMode(m) {
@@ -10647,7 +10776,12 @@ class Range {
    * @param {number} [end=data.length-1]
    * @return {object}  
    */
-  maxMinPriceVol ( data, start=0, end=data.length-1 ) {
+   maxMinPriceVol ( input ) {
+
+    let {data, start, end, that} = {...input};
+
+    start = (typeof start === "number")? start : 0;
+    end = (typeof end === "number")? end : data?.length-1;
 
     if (data.length == 0) {
       return {
@@ -10674,10 +10808,14 @@ class Range {
     }
 
     return {
-      priceMin: priceMin * (1 - this.yAxisBounds),
-      priceMax: priceMax * (1 + this.yAxisBounds),
+      priceMin: priceMin * (1 - that.yAxisBounds),
+      priceMax: priceMax * (1 + that.yAxisBounds),
       volumeMin: volumeMin,
       volumeMax: volumeMax
+    }
+
+    function limit(val, min, max) {
+      return Math.min(max, Math.max(min, val));
     }
   }
 
@@ -11004,13 +11142,210 @@ class Stream {
 
 }
 
-// core.js
+// theme.js
 
-const STYLE_TXCHART = "overflow: hidden;";
-const STYLE_UTILS = "border-bottom: 1px solid;";
-const STYLE_BODY  = "position: relative;";
-const STYLE_TOOLS = "position: absolute; top: 0; left: 0; height: 100%; min-height: 100%; border-right: 1px solid;";
-const STYLE_MAIN  = "position: absolute; top: 0; height: 100%;";
+class Theme {
+
+  static #list = new Map()
+  static #current
+
+  #config
+
+  constructor(theme, core) {
+    this.#config = (isObject(theme))? theme : {};
+
+    const reserved = [
+      "constructor"
+    ];
+
+    theme = {...defaultTheme, ...theme};
+
+    for (let t in theme) {
+      if (reserved.includes(t)) continue
+      this[t] = theme[t];
+    }
+  }
+
+  static create(theme, core) {
+    if (!(isObject(theme))) return false
+
+    theme.ID = (isString(theme.name))? uid(theme.name) : uid("theme");
+
+    const instance = new Theme(theme, core);
+
+    Theme.#list.set(theme.ID, instance);
+    Theme.setCurrent(theme.ID);
+
+    return instance
+  }
+
+  static get list() { return Theme.#list }
+  static set current(theme) { Theme.setCurrent(theme); }
+  static get current() { return Theme.#current }
+
+  static setCurrent(theme) {
+    if (isString(theme) && Theme.list.has(theme)) {
+      Theme.#current = theme;
+      return Theme.#list.get(theme)
+    }
+    else {
+      // use existing current theme
+      if (isString(Theme.#current) && Theme.list.has(Theme.#current))
+        return Theme.#list.get(Theme.#current)
+      // or default
+      else
+        return defaultTheme
+    }
+  }
+}
+
+// webWorkers.js
+
+class ThreadWorker {
+
+  #fn
+
+  constructor (fn) {
+    this.#fn = fn;
+    self.onmessage = m => this._onmessage(m.data);
+  }
+
+  _onmessage (m) {
+    const {r, data} = m;
+    const result = this.#fn(data);
+    self.postMessage({r, result});
+  }
+
+  end() {
+    self.close();
+  }
+}
+
+class Thread {
+
+  #ID
+  #cb
+  #err
+  #req = 0
+  #reqList = {}
+  #worker
+
+  constructor(ID, fn, cb, err) {
+    this.#ID = ID;
+    this.#cb = cb;
+    this.#err = err;
+    const workerFn = `
+      ${WebWorker$1.ThreadWorker.toString()};
+      const fn = ${fn}
+      const worker = new ThreadWorker(fn)
+    `;
+    const blob = new Blob([`;(() => {${workerFn}})()`], { type: 'text/javascript' });
+    const blobURL = URL.createObjectURL(blob);
+    this.#worker = new Worker(blobURL);
+    URL.revokeObjectURL(blobURL);
+  }
+
+  get ID() { return this.#ID }
+  get req() { return `r_${this.#req}` }
+
+  onmessage(m) {
+    return (isFunction(this.#cb))? this.#cb(m) : m
+  }
+
+  onerror(e) {
+    return (isFunction(this.#err))? this.#err(e) : e
+  }
+
+  postMessage(m) {
+    return new Promise((resolve, reject) => {
+      try {
+        let r = this.req;
+        this.#reqList[r] = {resolve, reject};
+
+        this.#worker.postMessage({r: r, data: m});
+
+        this.#worker.onmessage = m => {
+          const {r, result} = m.data;
+          if (r in this.#reqList) {
+            const {resolve, reject} = this.#reqList[r];
+            delete this.#reqList[r];
+            resolve(this.onmessage(result));
+          }
+        };
+
+        this.#worker.onerror = e => {
+          reject(this.onerror(e));
+        };
+
+      } catch (error) { reject(error); }
+    })
+    
+  }
+
+  terminate() {
+    this.#worker.terminate();
+  }
+}
+
+
+/**
+ * Provides web workers and threads that manage them
+ * @export
+ * @class WebWorker
+ */
+class WebWorker$1 {
+
+  static #threads = new Map()
+
+  static ThreadWorker = ThreadWorker
+
+  static Thread = Thread
+
+  static create(ID="worker", worker, cb, core) {
+    if (typeof window.Worker === "undefined") return false
+    if (isFunction(worker)) {
+      worker = worker.toString();
+    }
+    else if (isString(worker)) ;
+    else { return false }
+
+    ID = (isString(ID))? uid(ID) : uid("worker");
+    WebWorker$1.#threads.set(ID, new WebWorker$1.Thread(ID, worker, cb));
+    return WebWorker$1.#threads.get(ID)
+  }
+
+  static destroy(ID) {
+    if (!isString(ID)) return false
+
+    WebWorker$1.#threads.get(ID).terminate();
+    WebWorker$1.#threads.delete(ID);
+  }
+
+  /**
+   * destroy all web workers
+   */
+  static end() {
+    WebWorker$1.#threads.forEach( (value, key, map) => {
+      WebWorker$1.destroy(key);
+    });
+  }
+}
+
+
+
+// const doSomethingStr = doSomething.toString()
+// function doSomething(x) { 
+//   return `I did something. ${x}`
+// }
+
+// const test = WebWorker.create("WT", doSomethingStr)
+// // const result = await test.postMessage("bla")
+// // console.log(result)
+
+// test.postMessage("bla")
+// .then(r => console.log(r))
+
+// core.js
 
 // wait for talib wasm to initialize 
 (async () => {
@@ -11112,6 +11447,7 @@ class TradeXchart {
   #smoothScrollOffset = 0
   #panBeginPos = [null, null, null, null]
 
+  #workers
   #stream
   #pricePrecision
   #volumePrecision
@@ -11128,6 +11464,7 @@ class TradeXchart {
 constructor (mediator, options={}) {
 
     this.oncontextmenu = window.oncontextmenu;
+    this.#workers = WebWorker$1;
 
     this.logs = (options?.logs) ? options.logs : false;
     this.infos = (options?.infos) ? options.infos : false;
@@ -11254,6 +11591,7 @@ constructor (mediator, options={}) {
 
   set stream(stream) { return this.setStream(stream) }
   get stream() { return this.#stream }
+  get worker() { return this.#workers }
   get isEmtpy() { return this.#chartIsEmpty }
 
 
@@ -11273,6 +11611,7 @@ constructor (mediator, options={}) {
     config.cnt = cnt;
     config.modID = `${ID}_${cnt}`;
     config.container = container;
+    config.CPUCores = navigator.hardwareConcurrency;
 
     const core = new SX.Core(config);
 
@@ -11327,7 +11666,7 @@ constructor (mediator, options={}) {
     }
 
     // set default range
-    this.getRange(null, null, {interval: this.#time.timeFrameMS});
+    this.getRange(null, null, {interval: this.#time.timeFrameMS, core: this});
 
     if (this.#range.Length > 1) {
       // now set user defined (if any) range
@@ -11397,6 +11736,7 @@ constructor (mediator, options={}) {
 
   /**
    * Start the chart processing events and displaying data
+   * @memberof TradeXchart
    */
   start() {
     this.log("...processing state");
@@ -11414,11 +11754,14 @@ constructor (mediator, options={}) {
 
     if (this.#delayedSetRange) 
       this.on(STREAM_UPDATE, this.delayedSetRange.bind(this));
+
+    this.refresh();
   }
 
   /**
    * Stop all chart event processing and remove the chart from DOM.
    * In other words, destroy the chart.
+   * @memberof TradeXchart
    */
   end() {
     this.log("...cleanup the mess");
@@ -11431,6 +11774,7 @@ constructor (mediator, options={}) {
     this.MainPane.end();
     this.WidgetsG.end();
 
+    this.#workers.end();
     this.#state = null;
 
     DOM.findByID(this.id).remove;
@@ -11516,7 +11860,7 @@ constructor (mediator, options={}) {
       rangeStartTS: (rangeStartTS) => this.#rangeStartTS = (isNumber(rangeStartTS)) ? rangeStartTS : undefined,
       rangeLimit: (rangeLimit) => this.#rangeLimit = (isNumber(rangeLimit)) ? rangeLimit : RANGELIMIT,
       indicators: (indicators) => this.#indicators = {...Indicators, ...indicators },
-      theme: (theme) => this.setTheme(theme),
+      theme: (theme) => this.addTheme(theme),
       stream: (stream) => this.#stream = (isObject(stream)) ? stream : {},
       pricePrecision: (precision) => this.setPricePrecision(precision),
       volumePrecision: (precision) => this.setVolumePrecision(precision),
@@ -11564,6 +11908,7 @@ constructor (mediator, options={}) {
    * Set chart width and height
    * @param {number} w - width in pixels
    * @param {number} h - height in pixels
+   * @memberof TradeXchart
    */
   setDimensions(w, h) {
     let width = this.width;
@@ -11583,10 +11928,21 @@ constructor (mediator, options={}) {
     });
   }
 
+  setUtilsH(h) {
+    this.utilsH = h;
+    this.#elUtils.style.height = `${h}px`;
+  }
+
+  setToolsW(w) {
+    this.toolsW = w;
+    this.#elTools.style.width = `${w}px`;
+  }
+
   /**
- * Set the price accuracy
- * @param {number} pricePrecision - Price accuracy
- */
+   * Set the price accuracy
+   * @param {number} pricePrecision - Price accuracy
+   * @memberof TradeXchart
+   */
     setPricePrecision (pricePrecision) {
     if (!isNumber(pricePrecision) || pricePrecision < 0) {
       pricePrecision = PRICE_PRECISION;
@@ -11597,6 +11953,7 @@ constructor (mediator, options={}) {
   /**
    * Set the volume accuracy
    * @param {number} volumePrecision - Volume accuracy
+   * @memberof TradeXchart
    */
   setVolumePrecision (volumePrecision) {
     if (!isNumber(volumePrecision) || volumePrecision < 0) {
@@ -11606,12 +11963,29 @@ constructor (mediator, options={}) {
   }
 
   /**
-   * Set the chart theme
+   * Add a theme to the chart,
+   * if no current theme is set, make this the current one.
    * @param {object} volumePrecision - Volume accuracy
+   * @memberof TradeXchart
    */
-  setTheme(theme) {
-    // TODO: validation
-    this.#theme = theme;
+  addTheme(theme) {
+    const t = Theme.create(theme, this);
+
+    // if no themes are set then use this one
+    if (this.#theme === undefined) this.setTheme(t.ID);
+  }
+
+  /**
+ * Set the chart theme
+ * @param {object} volumePrecision - Volume accuracy
+ * @memberof TradeXchart
+ */
+  setTheme(ID) {
+    this.#theme = Theme.setCurrent(ID);
+
+    let chart = this.#theme.chart;
+    this.#elTXChart.style.background = chart.Background;
+    this.#elTXChart.style.border = `${chart.BorderThickness}px solid ${chart.BorderColour}`;
   }
 
   setScrollPos(pos) {
@@ -11639,6 +12013,12 @@ constructor (mediator, options={}) {
     }
   }
 
+  /**
+   * specify a chart stream
+   * @memberof TradeXchart
+   * @param {object} stream 
+   * @returns {instance}
+   */
   setStream(stream) {
     if (this.stream?.constructor.name == "Stream") {
       this.error("Error: Invoke stopStream() before starting a new one.");
@@ -11674,11 +12054,26 @@ constructor (mediator, options={}) {
 
   defaultNode() {
 
+    const STYLE_TXCHART = "overflow: hidden;";
+      let STYLE_UTILS = "border-bottom: 1px solid;";
+    const STYLE_BODY  = "position: relative;";
+    const STYLE_TOOLS = "position: absolute; top: 0; left: 0; height: 100%; min-height: 100%; border-right: 1px solid;";
+    const STYLE_MAIN  = "position: absolute; top: 0; height: 100%;";
+
+    if (this.config?.tools?.none) this.toolsW = 0;
+    if (this.config?.utils?.none) {
+      STYLE_UTILS = "border: none;";
+      this.utilsH = 0;
+    }
+
+    const toolsVis = (this.toolsW == 0)? "visibility: hidden;" : "visibility: visible;";
+    const utilsVis = (this.utilsH == 0)? "visibility: hidden;" : "visibility: visible;";
+
     const classesTXChart = CLASS_DEFAULT+" "+this.#userClasses; 
     const styleTXChart = STYLE_TXCHART + ` height: ${this.height}px; width: ${this.#chartW}px; background: ${this.chartBGColour}; color: ${this.chartTxtColour};`;
-    const styleUtils = STYLE_UTILS + ` height: ${this.utilsH}px; width: ${this.#chartW}px; border-color: ${this.chartBorderColour};`;
+    const styleUtils = STYLE_UTILS + ` height: ${this.utilsH}px; width: ${this.#chartW}px; border-color: ${this.chartBorderColour}; ${utilsVis}`;
     const styleBody = STYLE_BODY + ` height: calc(100% - ${this.utilsH}px); width: ${this.#chartW}px;`;
-    const styleTools = STYLE_TOOLS + ` width: ${this.toolsW}px; border-color: ${this.chartBorderColour};`;
+    const styleTools = STYLE_TOOLS + ` width: ${this.toolsW}px; border-color: ${this.chartBorderColour}; ${toolsVis}`;
     const styleMain = STYLE_MAIN + ` left: ${this.toolsW}px; width: calc(100% - ${this.toolsW}px);`;
     const styleWidgets = ` position: relative;`;
     const styleScale = `position: absolute; top: 0; right: 0; width: ${this.scaleW}px; height: 100%;`;
@@ -11725,7 +12120,7 @@ constructor (mediator, options={}) {
     }
 
     this.#scrollPos = scrollPos;
-    console.log("scrollPos:",this.#scrollPos);
+    // console.log("scrollPos:",this.#scrollPos)
   }
 
   offsetRange(offset) {
@@ -11739,8 +12134,8 @@ constructor (mediator, options={}) {
    * initialize range
    * @param {number} start - index
    * @param {number} end - index
+   * @memberof TradeXchart
    */
-  // TODO: config from where?
   getRange(start=0, end=0, config={}) {
     this.#range = new Range(this.allData, start, end, config);
     this.#range.interval = this.#time.timeFrameMS;
@@ -11752,6 +12147,7 @@ constructor (mediator, options={}) {
    * set start and end of range
    * @param {number} start - index
    * @param {number} end - index
+   * @memberof TradeXchart
    */
   setRange(start=0, end=this.rangeLimit) {
     this.#range.set(start, end);
@@ -11764,6 +12160,7 @@ constructor (mediator, options={}) {
    * Optionally set a new range upon merge.
    * @param {object} merge - merge data must be formatted to a Chart State
    * @param {boolean|object} newRange - false | {start: number, end: number}
+   * @memberof TradeXchart
    */
   // TODO: merge indicator data?
   // TODO: merge dataset?
@@ -11811,6 +12208,7 @@ constructor (mediator, options={}) {
 
   /**
    * Resize the chart
+   * @memberof TradeXchart
    * @param {number} width - pixels
    * @param {number} height - pixels
    * @returns {boolean} - success or failure
@@ -11822,6 +12220,10 @@ constructor (mediator, options={}) {
     return true
   }
 
+  /**
+   * refresh / redraw the chart
+   * @memberof TradeXchart
+   */
   refresh() {
     this.MainPane.draw();
     this.Chart.refresh();

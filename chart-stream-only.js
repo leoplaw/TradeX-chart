@@ -65,12 +65,34 @@ const config = {
   title: "BTC/USDT",
   width: 1000,
   height: 800,
+  utils: {none: true},
+  tools: {none: true},
   timeFrame: "1m",
   rangeStartTS: rangeStartTS,
   rangeLimit: 30,
   theme: {
-    candleType: "CANDLE_SOLID",
-    onchartVolumeH: 15,
+    candle: {
+      Type: "candle_solid",
+      UpBodyColour: "#02FFFF88",
+      UpWickColour: "#02FFFF",
+      DnBodyColour: "#F900FE88",
+      DnWickColour: "#F900FE",
+    },
+    volume: {
+      Height: 15,
+      UpColour: "#02FFFF44",
+      DnColour: "#F900FE44",
+    },
+    chart: {
+      Background: "#2A2B3A",
+      BorderColour: "#363C4E",
+      BorderThickness: 1,
+      GridColour: "#313647",
+      TextColour: "#ccc"
+    },
+    onChart: {
+
+    },
   },
   isCrypto: true,
   logs: false,

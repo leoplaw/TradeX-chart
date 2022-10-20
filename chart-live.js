@@ -2,8 +2,8 @@ import { Chart, DOM } from './tradex-chart.es.js'
 // import './chart-live.css'
 
 // let state = undefined
-import state from './data/1hour.js'
-// import state from './data/1minute.json'
+// import state from './data/1hour.js'
+import state from './data/data_btc_1m.js'
 // import state from './data/seconds.json'
 // import state from './data/seconds-indicator'
 
@@ -64,12 +64,33 @@ const config = {
   title: "BTC/USDT",
   width: 1000,
   height: 800,
+  utils: {none: true},
+  tools: {none: true},
   timeFrame: "1m",
   rangeStartTS: rangeStartTS,
   rangeLimit: 30,
   theme: {
-    candleType: "CANDLE_SOLID",
-    onchartVolumeH: 15,
+    candle: {
+      Type: "candle_solid",
+      UpBodyColour: "#00F04088",
+      UpWickColour: "#0F4",
+      DnBodyColour: "#F0004088",
+      DnWickColour: "#F04",
+    },
+    volume: {
+      Height: 15,
+      UpColour: "#00F04044",
+      DnColour: "#F0004044",
+    },
+    chart: {
+      Background: "#141414",
+      BorderColour: "#666",
+      GridColour: "#333",
+      TextColour: "#ccc"
+    },
+    onChart: {
+
+    },
   },
   isCrypto: true,
   logs: false,
