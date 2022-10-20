@@ -1,4 +1,4 @@
-import * as talib from './talib-web/lib/index.esm.js';
+import * as talib from './TradeX-chart/talib-web/lib/index.esm.js';
 
 // DOM.js
 // DOM utilities
